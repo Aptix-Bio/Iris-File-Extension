@@ -1,0 +1,337 @@
+name: CI
+
+# The gates, in one place. Eight jobs, each pinning a
+# property nothing else can:
+#
+#   spec        the JSON is self-consistent, and generated_source/ is what the
+#               current spec produces (the drift gate)
+#   tests       the generated layer and the primitives behave -- including the
+#               v1 oracle, the only test that reads bytes the shipped encoder
+#               wrote rather than another description of the format. Run on
+#               GCC, Clang, AppleClang, MSVC, and under the Xcode generator,
+#               because an include that one toolchain resolves transitively is
+#               a bug on the others, and because the Xcode generator names the
+#               compiler the raw toolchain `clang++`, an identity no other leg
+#               presents (see the matrix note).
+#   bazel       the Bazel build and its twelve tests, on the default
+#               toolchain AND MSVC -- the only job that exercises the
+#               /std:c++20 select and the IRIS_EXPORT= dllimport
+#               neutralization the Bazel rules need on Windows. The test
+#               rules live in tests/tests.bzl (ife_tests), loaded by
+#               BUILD.bazel
+#   downstream  Iris-Codec (the primary consumer) builds against THIS branch
+#               via a FetchContent source override -- the check that a change
+#               here does not break the ecosystem that depends on it
+#   sanitizers  the packed loads read exactly 3 and exactly 5 bytes. Without
+#               ASan those tests are ordinary passing round-trips and prove
+#               nothing
+#   wasm        the project's only __EMSCRIPTEN__ branch. Every native build
+#               takes the other side of that #if, so without this job the
+#               ranged-fetch path is never compiled at all
+#   document    the specification renders: a schema change that breaks it
+#               fails here rather than at publication
+#   big-endian  IFE is little-endian on disk at every version, which is a
+#               claim about every host, not about the one you build on
+#
+# The pattern across the last three: a branch no developer machine executes is
+# a branch no test can check, so each gets a job rather than a comment.
+
+on:
+  push:
+    branches: [main, 'spec/**']
+  pull_request:
+
+jobs:
+  spec:
+    name: spec documents and drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -m generator --validate
+      - run: python3 -m generator
+      - run: python3 -m generator --check
+      # Determinism (XP-3): two generator runs must be byte-identical. The
+      # seeds are the point — dict/set iteration order varies with
+      # PYTHONHASHSEED, which is where non-determinism enters. ctest covers
+      # the default environment; the seeds run here.
+      - name: Generator determinism (seed 0)
+        run: PYTHONHASHSEED=0 python3 tests/generator/test_determinism.py
+      - name: Generator determinism (seed 1)
+        run: PYTHONHASHSEED=1 python3 tests/generator/test_determinism.py
+      # Runs here rather than in the MSVC job so a Windows-only defect fails
+      # in twenty seconds on Linux instead of after a full matrix build. It
+      # replaces none of that job; it just gets there first.
+      - name: Portability lint
+        run: python3 tools/portability_lint.py
+
+  tests:
+    name: build and test (${{ matrix.compiler }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, compiler: GCC}
+          - {os: ubuntu-latest, compiler: Clang, cxx: clang++}
+          - {os: macos-latest, compiler: AppleClang}
+          # AppleClang via Makefiles names the driver `c++`; the Xcode generator
+          # names it the raw toolchain binary `.../usr/bin/clang++`. That is a
+          # different identity to anything above: it is what a tool that
+          # classifies the compiler by name sees, and the only config whose
+          # driver is a toolchain binary with no SDK default. Both facts bit
+          # the README gate (tests/readme/readme_compiles.py), and neither
+          # AppleClang leg here nor any Linux leg can reproduce them.
+          - {os: macos-latest, compiler: Xcode, generator: Xcode}
+          - {os: windows-latest, compiler: MSVC}
+    steps:
+      - uses: actions/checkout@v7
+      # .deps/corpus is fetched from iris.exampleslides.org at configure (see
+      # tools/fetch_corpus.py); cache it by manifest digest so a fresh runner
+      # never touches the external host — the fetch script's own guarantee.
+      - uses: actions/cache@v6
+        with:
+          path: .deps/corpus
+          key: corpus-${{ hashFiles('tests/corpus/manifest.json') }}
+      # MSVC locates its standard headers through INCLUDE, which the Windows
+      # runner does not set: the build's MSBuild invocation carries it per
+      # project, but the README gate spawns cl itself at test time and, without
+      # it, cannot find <cstddef>. Establish the developer environment for the
+      # whole job — configure, build and test then all see the same toolchain.
+      - name: Set up the MSVC developer environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      # The configuration is named three times on purpose. Visual Studio is a
+      # multi-config generator: it ignores CMAKE_BUILD_TYPE and picks a
+      # configuration when it builds and again when it tests. Omit --config
+      # and it silently builds Debug; omit ctest -C and every test reports
+      # "Test not available without configuration" and counts as a failure,
+      # which is what this job did. Makefiles and Ninja ignore the two flags
+      # and honour the cache variable instead, so naming all three is what
+      # makes one line work on every runner.
+      - name: Configure
+        run: >
+          cmake -B build -DIFE_BUILD_TESTS=ON -DIFE_RUN_GENERATOR=ON
+          -DCMAKE_BUILD_TYPE=Release
+          ${{ matrix.generator && format('-G {0}', matrix.generator) || '' }}
+          ${{ matrix.cxx && format('-DCMAKE_CXX_COMPILER={0}', matrix.cxx) || '' }}
+      - run: cmake --build build --config Release -j
+      - run: ctest --test-dir build -C Release --output-on-failure
+
+  bazel:
+    name: bazel build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      # MODULE.bazel resolves Iris-Headers via local_path_override
+      # ../Iris-Headers (the sibling-checkout layout of local development);
+      # CI materializes exactly that layout. Plain git, not actions/checkout:
+      # checkout@v4 rejects a `path:` outside the workspace ("Repository path
+      # ... is not under ..."). The repo is public, so no token is needed.
+      # The clone prefers this owner's Iris-Headers fork, so a fork's CI builds
+      # against the fork's headers -- the same insulation the CMake fetch gives,
+      # and required here: the Org's Iris-Headers still lacks the Memory rename
+      # this branch depends on. Owners without a headers fork fall back to the
+      # upstream org.
+      - name: Check out Iris-Headers beside the main repo
+        shell: bash
+        run: |
+          if git clone --depth 1 "https://github.com/${{ github.repository_owner }}/Iris-Headers.git" ../Iris-Headers; then
+            echo "using ${{ github.repository_owner }}/Iris-Headers"
+          else
+            echo "no usable ${{ github.repository_owner }}/Iris-Headers" \
+                 "(any clone error above is expected) - falling back to IrisDigitalPathology"
+            rm -rf ../Iris-Headers
+            git clone --depth 1 https://github.com/IrisDigitalPathology/Iris-Headers.git ../Iris-Headers
+          fi
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+      # Explicit bash: PowerShell mangles the // in target patterns on
+      # Windows (documented setup-bazel Windows issue).
+      # --verbose_failures: a failing genrule's command line and output must
+      # reach the log — the runner truncates the bare action summary line.
+      # --action_env=PATH: Bazel's strict action env strips PATH to
+      # Git+system dirs on Windows, so genrules would find no python at all
+      # (observed in the corpus genrule's `SET PATH=...`); inherit the
+      # runner PATH instead. CI-only, no effect on production builds.
+      - name: Build and test
+        shell: bash
+        run: bazel test //... --test_output=errors --verbose_failures --action_env=PATH
+
+  downstream:
+    name: Iris-Codec builds against this branch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Iris-Codec's CMake FetchContent-pulls IFE from origin/main; the
+      # FETCHCONTENT_SOURCE_DIR override redirects that fetch to THIS
+      # checkout — the exact state the PR would ship. Plain git, not
+      # actions/checkout: checkout rejects paths outside the workspace.
+      # The clone prefers this owner's Iris-Codec fork, so a fork's CI tests
+      # the fork's codec against this IFE state; owners without a codec fork
+      # (the CMakeLists.txt probe catches missing and empty ones) fall back
+      # to the upstream org.
+      # Build-only, matching Iris-Codec's own CI (which runs no ctest). The
+      # apt + jpeg-turbo recipe is copied from that CI verbatim.
+      - name: Check out Iris-Codec beside this repository
+        shell: bash
+        run: |
+          if git clone --depth 1 "https://github.com/${{ github.repository_owner }}/Iris-Codec.git" ../Iris-Codec && \
+             [ -f ../Iris-Codec/CMakeLists.txt ]; then
+            echo "using ${{ github.repository_owner }}/Iris-Codec"
+          else
+            echo "no usable ${{ github.repository_owner }}/Iris-Codec" \
+                 "(any clone error above is expected) - falling back to IrisDigitalPathology"
+            rm -rf ../Iris-Codec
+            git clone --depth 1 "https://github.com/IrisDigitalPathology/Iris-Codec.git" ../Iris-Codec
+          fi
+      - name: Configure Jpeg-Turbo PPA
+        run: |
+          sudo wget -q https://packagecloud.io/dcommander/libjpeg-turbo/gpgkey -O /etc/apt/trusted.gpg.d/libjpeg-turbo
+          sudo gpg --dearmor /etc/apt/trusted.gpg.d/libjpeg-turbo
+          sudo wget https://raw.githubusercontent.com/libjpeg-turbo/repo/main/libjpeg-turbo.list -O /etc/apt/sources.list.d/libjpeg-turbo.list
+          sudo apt update
+      - name: Fetch Dependencies
+        run: sudo apt install libhwy-dev libjpeg-turbo-official libavif-dev libpng-dev zlib1g-dev openslide-tools python3-dev meson ninja-build -y
+      - name: Configure CMake
+        run: >
+          cmake -B build -S ../Iris-Codec
+          -D CMAKE_BUILD_TYPE=Release
+          -D CMAKE_PREFIX_PATH="/opt/libjpeg-turbo/lib64/cmake/libjpeg-turbo/"
+          -D TURBOJPEG_INCLUDE="/opt/libjpeg-turbo/include/"
+          -D FETCHCONTENT_SOURCE_DIR_IRISFILEEXTENSION=$GITHUB_WORKSPACE
+      - name: Build
+        run: cmake --build build --config Release -j
+
+  sanitizers:
+    name: address and undefined behaviour
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Corpus cache as in the tests job: fresh runners must not hit the
+      # external host for the two pinned fixtures.
+      - uses: actions/cache@v6
+        with:
+          path: .deps/corpus
+          key: corpus-${{ hashFiles('tests/corpus/manifest.json') }}
+      - name: Configure with ASan + UBSan
+        run: >
+          cmake -B build-asan -DIFE_BUILD_TESTS=ON -DIFE_RUN_GENERATOR=ON
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - run: cmake --build build-asan -j
+      - run: ctest --test-dir build-asan --output-on-failure
+
+  document:
+    name: specification document
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: false
+      - run: gem install asciidoctor asciidoctor-pdf
+
+      # A schema change that breaks the document fails here rather than at
+      # publication. The narrative is hand-written; every layout and value
+      # table in it is an include:: of generated content, so a renamed block
+      # or a deleted enumeration surfaces as an unresolved include.
+      - name: Build HTML and PDF
+        run: spec/build_document.sh "$GITHUB_WORKSPACE/build/doc"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ife-specification
+          path: build/doc/
+
+  wasm:
+    name: emscripten (the residency branch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mymindstorm/setup-emsdk@v16
+
+      # src/IFE_Window.cpp holds the project's only __EMSCRIPTEN__ branch, and
+      # no other job compiles it: every native build takes the other side of
+      # the #if. Without this step the ranged-fetch path -- EM_ASYNC_JS body
+      # included -- is never seen by a compiler at all.
+      - name: Fetch dependencies (native)
+        run: cmake -B build
+      - name: Compile the Emscripten branch
+        run: |
+          emcc -std=c++20 -Werror -c src/IFE_Window.cpp \
+            -I include -I src -I .deps/irisheaders-src/include -I .deps/irisheaders-src/priv \
+            -o /tmp/ife_window_wasm.o
+
+  big-endian:
+    name: big-endian (s390x)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4.2.0
+        with:
+          platforms: s390x
+
+      # Native configure first: it fetches Iris-Headers into .deps/ and renders
+      # generated_source/, so the emulated container only has to compile. Doing
+      # the fetch and the generation under emulation would cost minutes for no
+      # extra coverage -- neither step is architecture dependent.
+      - name: Fetch dependencies and generate (native)
+        run: cmake -B build -DIFE_BUILD_TESTS=ON -DIFE_RUN_GENERATOR=ON
+
+      # The three suites that touch bytes. The parity wall was a compile-time
+      # comparison against the shipped constants and died with the hand-written
+      # layer; the oracle is the byte-level gate and runs here.
+      #
+      # The oracle earns its place here twice over: it reads bytes the shipped
+      # encoder wrote, on a host whose byte order is the opposite of every
+      # machine either was developed on. The corpus fetch runs in the native
+      # configure above, so the container only compiles and reads.
+      - name: Compile and run on s390x
+        run: |
+          docker run --rm --platform linux/s390x -v "$PWD":/repo -w /repo alpine:latest sh -c '
+            set -e
+            apk add --no-cache g++ >/dev/null
+            echo "arch: $(uname -m)"
+            # Include resolution on this emulated host, established by the
+            # 31fbbf6 diagnostics: absolute -I /repo/... fails to open the same
+            # file that relative -I include opens (qemu-user path quirk), so
+            # the paths below are relative -- the container CWD is /repo by
+            # construction. Word-splitting of $INC is verified working.
+            echo "--- IFE_Bytes.hpp:"; ls -la /repo/include/IFE_Bytes.hpp 2>&1
+            INC="-I include -I src -I .deps/irisheaders-src/include -I .deps/irisheaders-src/priv -I generated_source"
+            BLK="generated_source/IFE_Blocks.cpp"
+            # Bisect: the last compile that worked (8f2b46d) was a single-TU
+            # invocation; every failure since has had $BLK on the line. A vs B
+            # isolates whether the second TU is the trigger.
+            echo "--- A: one TU (8f2b46d shape):"
+            g++ -std=c++20 -O2 $INC -o /tmp/a tests/ife_bytes_tests.cpp && echo A_OK || echo A_FAIL
+            echo "--- B: two TUs (failing shape):"
+            g++ -std=c++20 -O2 $INC -o /tmp/b tests/ife_bytes_tests.cpp $BLK && echo B_OK || echo B_FAIL
+            # The real builds, one TU per compile then a link: multi-TU
+            # invocations have failed to resolve -I includes on this host, and
+            # -c + link does not depend on the mechanism.
+            g++ -std=c++20 -O2 $INC -c tests/ife_bytes_tests.cpp -o /tmp/bytes_tu.o
+            g++ -std=c++20 -O2 $INC -c $BLK -o /tmp/blk_tu.o
+            g++ -std=c++20 -O2 /tmp/bytes_tu.o /tmp/blk_tu.o -o /tmp/bytes
+            g++ -std=c++20 -O2 $INC -c tests/ife_blocks_tests.cpp -o /tmp/blocks_tu.o
+            g++ -std=c++20 -O2 /tmp/blocks_tu.o /tmp/blk_tu.o -o /tmp/blocks
+            g++ -std=c++20 -O2 $INC -c tests/ife_window_tests.cpp -o /tmp/window_tu.o
+            g++ -std=c++20 -O2 $INC -c src/IFE_Window.cpp -o /tmp/window_src.o
+            g++ -std=c++20 -O2 /tmp/window_tu.o /tmp/window_src.o -o /tmp/window
+            g++ -std=c++20 -O2 $INC -I tests -c tests/ife_v1_oracle_tests.cpp -o /tmp/oracle_tu.o
+            g++ -std=c++20 -O2 $INC -I tests -c tests/ife_v1_fixture.cpp -o /tmp/fixture_tu.o
+            g++ -std=c++20 -O2 /tmp/oracle_tu.o /tmp/fixture_tu.o /tmp/blk_tu.o -o /tmp/oracle
+            /tmp/bytes
+            /tmp/blocks
+            /tmp/window
+            /tmp/oracle /repo/.deps/corpus
+          '

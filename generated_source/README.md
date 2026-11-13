@@ -1,0 +1,67 @@
+# `generated_source/` — generated C++ for the Iris File Extension
+
+This directory holds the **regenerable** output of the IFE code generator
+(`generator/`). Everything here is **gitignored** and freely
+regenerated from the committed JSON specification — never hand-edited.
+
+| Path | Contract |
+|------|----------|
+| `spec/ife_header.json`, `spec/ife_fields.json`, `spec/ife_constants.json` | **Source of truth. Committed.** Every field, type, and value. |
+| `generator/` | Stdlib-only Python package, `python -m generator`. |
+| `generated_source/` (this dir) | **Freely regenerable. Gitignored.** The three files below. |
+
+| File | Content |
+|------|---------|
+| `IFE_Blocks.hpp` | The whole layer, in one header: `Iris::File::constants` (enumerations and sentinels), each block's derived offset and size tables, the typed block handles with their accessors, `points_to` navigation and structural validators, the `*CreateInfo` writer payloads, and the `Iris::File::Serialization` consumer namespace. Includes the Iris headers itself. |
+| `IFE_Validation.hpp` / `.cpp` | The conformance layer — the normative `shall`/`should` clauses from the JSON, compiled into an attachable set of `ValidationHooks`. Its own target; never a link-time dependency of the library. |
+
+One header, not several: the split cost consumers an include list and bought
+nothing, since the JSON is the single source of truth and a generated file may
+duplicate freely.
+
+## Regenerate
+
+```bash
+python3 -m generator --out-dir generated_source
+```
+
+or from CMake:
+
+```bash
+cmake -B build -DIFE_RUN_GENERATOR=ON
+```
+
+Generation also runs automatically at configure when the anchor file
+(`IFE_VTables.hpp`) is missing from this directory. `README.md` is the only
+committed file here.
+
+## Why not commit?
+
+The committed JSON is the single source of truth; committing generated
+output would create a second, drift-prone copy. Downstream consumers
+(FetchContent) receive the generated code at configure time — the generator
+is stdlib-only Python, so no toolchain beyond Python 3 is required.
+
+## Consuming this layer
+
+Nothing here is exported from the shared library — `Iris::File::blocks` and
+`Iris::File::constants` carry no export marking, and a test fails the build if any of
+them becomes visible. Include the header and the definitions come with it:
+
+```cpp
+#include "IFE_Blocks.hpp"       // inline definitions; nothing to link
+```
+
+That is deliberate, not an oversight. This layer is field arithmetic — inlining
+a `u24` load beats calling it across a library boundary — and it is *generated*,
+so it must stay free to change whenever the schema does. An exported symbol is
+one that cannot. The stable, exported API is the semantic layer:
+`Iris::File::validate_file_structure`, `abstract_file_structure`,
+`generate_file_map`, and the `Abstraction::` structs.
+
+## Contract
+
+* Generator output must be byte-stable (stable ordering, no timestamps).
+* Never hand-edit anything here; fix the JSON and regenerate.
+* The vtable layouts emitted here are wire constants — see
+  `spec/README.md` for the append-only versioning rules.

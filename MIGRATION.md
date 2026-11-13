@@ -1,0 +1,4701 @@
+# IFE Migration — JSON-Specified Format, Generated Code & Documentation
+
+# ▶ HANDLE LAYER — Builder / Parser, and the namespace hierarchy (2026-09-28)
+
+Decisions (Ryan). The executable work orders live in the gitignored
+`fastfhir_cap_api_transfer_handoff.md` Part A; what must outlive it is here.
+
+- **Layering.** An application *owns* an IFE handle: Iris-Codec's Encoder holds an
+  `Iris::File::Builder`, its Slide holds an `Iris::File::Parser`. The Builder
+  claims space and writes every block; the Encoder does sources, codecs and
+  threads. The Parser owns the read-only mapping and bounds-checked bytes; the
+  Slide decodes. Worked example of the split: the *Encoder* names the temp file,
+  hands it to the Builder, and moves the finished file — the Builder only
+  writes where it is told and leaves a closed file at `finalize`.
+- **IFE is independent of Iris-Codec.** The codec depends on IFE, never the
+  reverse. IFE's handles are built first, anticipating the codec; Ryan rewrites
+  the codec onto them later.
+- **Arenas never remap.** A HUGE sparse reservation (Builder default 8 GiB);
+  growth is pages touched inside it; exhausting it is terminal.
+- **NULL_TILE is a legitimate "no tile here."** A Builder refuses to finalize a
+  tile nobody accounted for; it never publishes one as NULL_TILE.
+- **Tile frames:** optional (and encouraged) on single-plane layers; mandatory
+  on Z-stacked layers — to be written into the **1.1 draft** (no version bump).
+- **Namespaces:** IFE is `Iris::File::` (renamed from `IFE::` 2026-09-28, before
+  the `IFE::` spelling was ever pushed). Core stays `Iris::` (`Iris::Memory`).
+  `Iris::Codec::` for the codec is wanted later, but only after the format
+  vocabulary Iris-Headers still declares in `namespace IrisCodec` (`Metadata`,
+  `Encoding`, `AssociatedImageInfo`, …) moves to `Iris::`/`Iris::File::` —
+  renamed in place it would make File depend on Codec. The `IFE_` prefixes
+  (`IFE_EXPORT`, the `IFE_*` global aliases, `IFE_*.hpp`) name the product and
+  stay. `Iris::File` no longer re-exports `Iris::` through a using-directive: a
+  consumer that wants both unqualified writes both.
+- **The layout is the caller's (2026-09-30).** A Builder controls how the
+  stream is mutated — claim space at the head, fill it — and never where a
+  block goes: "like FastFHIR, that's up to the caller of Builder's API". The
+  first `finalize` wrote the whole structure in its own order and sorted the
+  attributes, which put METADATA after the mutable attribute blocks and image
+  bytes ahead of the tile table; Iris-Codec could not reproduce the layout it
+  has always written (fixed-size blocks ahead of ones an edit replaces:
+  tiles → tile table → METADATA → ICC → images → attributes). `finalize` now
+  only seals (`BuilderFinalizeInfo{tileTable, metadata, revision}`); the caller
+  composes every structure block through `claim` / `fill` / `append` behind
+  `->`, each landing at the head when called, from what the handle reports it
+  placed — `tile_offsets()` (refusing a tile nobody accounted for) and
+  `image_entries()`; `query()` reads the stream back. (Briefly the handle
+  placed the tile table, images array and attributes itself —
+  `append_tile_table` / `append_images` / `append_attributes`; folded into this
+  shape the same day, 4abcf16.) Nothing is sorted: attribute entries go down in
+  the order the caller writes them. `ife_builder_layered_tests` (h) writes the same inputs in
+  two layouts; the shared sweep fixture is byte-identical to before.
+
+Implemented 2026-09-28: the rename; the Builder's application tier
+(`set_tile_table` / `append_tile` / `append_null_tile` / `append_image` /
+`finalize`, block tier behind `->`) with the header region reserved and a closed
+file at finalize; `Parser::open` owning its mapping with zero-copy
+`tile()` / `image()` and `tile_planes()`; tile entries bounds-checked on read;
+Z-stacked frames required (1.1 draft) and validated; generated `store()`
+refusing values wider than their packed fields; recovery enumerators bounded by
+geometry (an ASan overflow); `Iris::Memory` reserve-not-commit on anonymous
+arenas (Iris-Headers). Tests: `ife_builder_tests`, `ife_builder_layered_tests`,
+`ife_parser_tests`, `ife_blocks_tests`, and `ife_readme_compiles` (the README's
+examples, compiled as published).
+
+Consumed 2026-09-30 (Iris-Codec 8a0f93f, landed with this repository's 4abcf16):
+the Encoder writes through a Builder — `append_tile` / `append_null_tile` from
+its pool, then composes its own layout from `tile_offsets()` / `image_entries()`
+(tile table, METADATA claimed early and filled last, ICC, images, attributes)
+and `finalize` — and moves the scratch file into place; the Slide holds a `Parser`. The codec's file-mapping layer
+(`IrisCodecFile.*`) is deleted. Its encoder output is byte-identical to its
+pre-Builder output. It writes no tile frames on single-plane layers; an Iris
+source's Z-stacked layers pass through framed, with their plane counts.
+
+# ▶ RECOVERY REBUILD — the census engine (2026-09-28)
+
+**The engine below was removed on 2026-09-28**, uncommitted on top of `2967b09`,
+so that it can be rebuilt on FastFHIR's census → branch-solver → transactional-apply
+design (`../FastFHIR` `cap-api-surface`, commits `713d4f8` · `8ebcb52` · `0937653`;
+`../FastFHIR/recovery_algorithm_handoff.md`). The old engine can be recovered with
+`git show 2967b09:src/IFE_Recovery.cpp`.
+
+| Removed | Kept |
+|---|---|
+| `include/IFE_Recovery.hpp`, `src/IFE_Recovery.cpp` (2 253 lines) | `generate_file_map` and the file-map types (`FileMap`, `FileMapEntry`, `MapEntryType`, `Gap`/`GapClass`, `ProducerFailure`) |
+| `Recovery`, `recover_file_structure`, `BlockRef`, `BlockVerdict`, `RepairClass`, `RecoveryReport` | `readable_entries` and `tile_frame_error` (`include/IFE_Primitives.hpp`) |
+| `ife_recovery_tests`, `ife_recovery_bench_tests`, `ife_damage_sweep_tests` | the two-witness model and the paid-for rules (CLAUDE.md "Recovery") |
+
+What is missing until the rebuild lands:
+- **Any way to reopen a file `abstract_file_structure` refuses.** The census (RB-3) says
+  what is damaged; deciding and writing repairs is RB-5 through RB-7.
+
+The RC-* work orders below describe the removed engine. They stay as the record of
+what it learned, and each lesson must reappear as a test of the census engine.
+
+## The plan (RB-0 … RB-9)
+
+The target is FastFHIR's design (`recovery_algorithm_handoff.md` §1–§9), rebuilt
+for IFE's bytes. Its eight rules carry over unchanged:
+- nothing is written until the end;
+- a proposed value is never evidence;
+- each witness is compared with the value it should encode, never with another witness;
+- hard constraints eliminate a candidate; everything else only ranks;
+- a match is admitted only where coincidence is improbable;
+- the unit of decision is a branch;
+- zero wrong writes;
+- the result is deterministic.
+
+### Where IFE differs from FastFHIR
+
+| | FastFHIR | IFE | consequence |
+|---|---|---|---|
+| file size | MBs | GBs, almost all compressed pixel data | `apply` cannot copy the file into RAM (OD-R1); the byte scan runs on threads |
+| references | 8/10-byte slots, relative codes | 14 block slots and 2 array-entry slots, all absolute u64 (`points_to` in `spec/ife_fields.json`); tile entries (u40 OFFSET + u24 SIZE); nested attribute values (u64 offsets inside ATTRIBUTE_BYTES, seated by ATTRIBUTE_SIZES) | three slot representations |
+| headerless children | none | tile streams. The entry's SIZE is their only extent witness; an optional frame adds a u40 self-offset and an exact TILE_INDEX | frames are anchors of their own kind (RB-6) |
+| layout | one per build | version-aware (EXTENSION_MAJOR/MINOR at the root) | the version is decided first, with the extent |
+| root | FF_HEADER; STREAM_SIZE checked against the checksum footer | FILE_HEADER: MAGIC, RECOVERY, version, FILE_SIZE checked against the file's size; no footer (RC-5) | header verdicts per field (RB-4) |
+| block order | parent order ≈ offset order | completion order: the codec claims tiles from many threads | FastFHIR's REC-23 bracket rule stays out |
+| density, one parent per block | measured on Synthea | both hold on every writer measured at the reader's own version (RB-0). A newer file read by an older reader has gaps by design: appended fields make its blocks longer than the reader knows (`GapClass::VersionSkew`) | density ranks only where extents are exact (OD-R2); OD-R3 |
+
+**False anchors in pixel data** (RB-0 (d), on proxy JPEG tiles). A frame's
+self-offset is 40 bits: an 8 GiB slide holds 0.027 positions whose u40 reads
+exactly as their own address, 0.96 within one bit and 17 within two. A u64 block
+self-offset with a 0x55 tag byte gives under 10⁻⁷ even at two bits. So a frame
+is an anchor only at distance 0 **and** with a plausible TILE_INDEX and
+Z_PLANES. FastFHIR's `SELF_RADIUS = 2` applies to blocks, never to frames.
+
+### Shape
+
+```mermaid
+flowchart TD
+    C["Recovery(FileAccessInfo)<br/>trusted extent + version"] --> S["scan(), on threads<br/>blocks: u64 self-offset + 0x55xx tag<br/>frames: exact u40 + a TILE_INDEX in range"]
+    GM["generate_file_map()"] --> W["walk_slots()<br/>the generated slot table"]
+    W --> CE
+    S --> CE["take_census()<br/>anchors, edges, islands, chained holes, open points"]
+    CE --> CY{"run_cycle()"}
+    CY -->|"arrays"| AE["resolve_extent()<br/>STRIDE, COUNT, VersionSkew"]
+    AE --> CY
+    CY -->|"slots"| T["candidates, then tree, then components"]
+    T --> AC{"best clearly ahead?"}
+    AC -->|"yes"| D["decide()<br/>owners, anchors, new questions (RAM only)"]
+    AC -->|"no"| CY
+    D --> CY
+    CY -->|"nothing changed"| RP["report()<br/>verdicts with planned writes, header verdicts, gaps re-tiled"]
+    RP --> AP["apply(report, target)<br/>each group lands whole or rolls back"]
+```
+
+**One graph walk.** `generate_file_map` and the census enumerate references
+with the same `walk_slots` over a generated slot table (RB-2). This replaces the
+removed engine's seven hand-written enumerators and `generate_file_map`'s own
+walker. The census adds the byte scan; the map does not, so a clean-file map
+stays proportional to the number of blocks, never to file size.
+
+```mermaid
+classDiagram
+    class Recovery {
+        +Recovery(FileAccessInfo)
+        +census() Census
+        +recover() RecoveryReport
+        +apply(RecoveryReport, target) ApplyReport
+    }
+    class SlotTable {
+        <<generated>>
+        +slots(MapEntryType, version) Slot[]
+    }
+    class Slot {
+        +parent Offset
+        +seat Offset
+        +repr SlotRepr
+        +stored u64
+        +expect MapEntryType
+    }
+    class Census {
+        +extent Size
+        +edges Edge[]
+        +islands Island[]
+        +holes Gap[]
+        +points Point[]
+    }
+    class Edge {
+        +slot Slot
+        +child Offset
+    }
+    class Island {
+        +root Offset
+        +attached bool
+        +members Offset[]
+    }
+    class Point {
+        +kind PointKind
+        +slot Slot
+    }
+    class RecoveryReport {
+        +blocks BlockVerdict[]
+        +header HeaderVerdict[]
+        +gaps Gap[]
+    }
+    class BlockVerdict {
+        +block BlockRef
+        +class_ RepairClass
+        +candidates Offset[]
+        +writes PlannedWrite[]
+    }
+    class PlannedWrite {
+        +seat Offset
+        +width u8
+        +value u64
+    }
+    class HeaderVerdict {
+        +field HeaderField
+        +class_ RepairClass
+        +stored u64
+        +restored u64
+    }
+    Recovery ..> SlotTable : walk_slots
+    Recovery --> Census
+    Census *-- Edge
+    Census *-- Island
+    Census *-- Point
+    Edge *-- Slot
+    Point *-- Slot
+    Recovery --> RecoveryReport
+    RecoveryReport *-- BlockVerdict
+    RecoveryReport *-- HeaderVerdict
+    BlockVerdict *-- PlannedWrite
+```
+
+### Work orders
+
+In order, each ending at its gate. RB-1 may run beside RB-0. Every new test is
+registered in both `tests/tests.cmake` and `tests/tests.bzl`, and every gate
+includes the ASan build (`cmake --build --preset asan && ctest --preset asan`).
+
+- [x] **RB-0 — Measure the premises.** ✅ 2026-09-28, except (d) on real tiles.
+  The probes were scratch programs, not committed (the repository stays small;
+  RB-8 decides whether a threaded fixture helper lands). To rebuild one: a
+  Builder slide of 3 layers (10×10, 20×20, 40×40 = 2 100 tiles, 5 % null,
+  200–4 000 B streams), workers taking tiles in grid order as the codec's do,
+  frames on and off, one image, 20 attributes, a 3 000 B ICC profile; then
+  intervals from `generate_file_map` plus each tile's frame.
+
+  | file | (a) gaps / overlaps | (b) shared targets | (c) framed SIZE = next start − anchor | tile offsets ascending |
+  |---|---|---|---|---|
+  | `cipher_iris`, `v1_0_witness`, `v1_1_witness` | 0 / 0 | 0 | 3/3, —, 3/3 | 2/2, 83/83, 2/2 |
+  | Builder, 1 thread, frames on / off | 0 / 0 | 0 | 2 000/2 000, — | 1 999/1 999 |
+  | Builder, 8 threads, frames on / off | 0 / 0 | 0 | 1 988/1 988, — | 1 139/1 987, 1 016/1 987 |
+
+  - **Density and one parent hold on every writer measured.** Read, not run:
+    the pre-Builder encoder is dense too. It bump-claims from the header's end,
+    and `RESERVE_METADATA` claims exactly the METADATA block written into it
+    later. No Iris-Codec path edits a file in place (`FILE_REVISION` is passed
+    through, never incremented), so OD-R4 has no writer today.
+  - **Order is not a witness** (57 % ascending at 8 threads), as measured
+    2026-09-09; the single-threaded corpus reads 100 % and would mislead.
+  - **(d) False anchors** — expected counts per slide, from 2 000 PIL-encoded
+    JPEG tiles of synthetic tissue (q80, 14.9 MB; a **proxy**) and as many
+    uniform bytes:
+
+    | 8 GiB slide | exact | ≤ 1 bit | ≤ 2 bits |
+    |---|---|---|---|
+    | frame u40 self-offset, JPEG / uniform | 0.027 / 0.008 | 0.96 / 0.32 | 17 / 6.4 |
+    | + TILE_INDEX < 200 000 and Z_PLANES ≤ 16, JPEG | < 10⁻⁷ | 0.0008 | 0.028 |
+    | block u64 self-offset + a 0x55 tag byte, JPEG | < 10⁻⁷ | < 10⁻⁷ | < 10⁻⁷ |
+
+    JPEG is 3–5× worse than the uniform arithmetic. A bare frame match is
+    unsafe even when exact, so a frame is an anchor only at distance 0 **with**
+    a plausible TILE_INDEX and Z_PLANES, and a tile candidate must match its
+    slot's index exactly. Blocks keep `SELF_RADIUS = 2`: 2·10⁻⁷ even at
+    64 GiB. **Still open:** the same measurement on a real slide's JPEG and
+    AVIF tiles.
+  - **Density is not a rule** (Ryan, 2026-09-28 — OD-R2). RB-0 only measured
+    files at the reader's own version. A reader computes a block's extent from
+    the fields it knows, so in a newer file every BLOCK-shaped type that gained
+    fields ends later than the reader thinks. Those gaps are there by design.
+    Arrays (stride on disk) and byte arrays (stamped count) do not skew, and
+    block **starts** never do (VALIDATION is at offset 0). The file's version is
+    in its header, so the reader knows which case it is in.
+  - **Recommendation for OD-R3**, which stays Ryan's: one parent held
+    everywhere, so H5 as a hard constraint.
+- [x] **RB-1 — Restore the read-path damage sweep, without recovery.** ✅ 2026-09-28.
+  `ife_damage_sweep_tests` (CMake + Bazel) flips every bit of the three corpus
+  files and of a Builder-written slide (frames, a Z-stacked layer, a null tile,
+  an image, attributes, ICC), one at a time, as FastFHIR's
+  `census_single_flip_sweep` does: 43 216 flips, 0.6 s, 6.8 s under ASan.
+  Red checks: `readable_entries` trusting COUNT → ASan heap-buffer-overflow in
+  `generate_file_map`; the walk's tile bounds removed → the sweep crashes
+  (SIGBUS). **Found and fixed:** 212 flips validated but the abstraction
+  refused them — `validate_file_structure` never sliced the annotation groups.
+  Both paths now share `walk_annotation_groups` (as they share
+  `walk_tile_entries`), and the sweep asserts that a file that validates can
+  be read (red: removing the call fails it).
+- [x] **RB-2 — The generated reference table.** ✅ 2026-09-28.
+  `Abstraction::FieldInfo` (`IFE_Recovery.hpp`) mirrors FastFHIR's
+  `FF_FieldInfo`, reference fields only: `name`, `field_offset`,
+  `child_recovery`, `nullable`, `in_entry`, `since`.
+  `reference_fields_view(owner)` is generated into `IFE_Map.hpp` from the
+  spec's `points_to`, as an exhaustive switch with no `default`: 16 edges, 14
+  in block headers and 2 in array entries. `field_offset` counts from the
+  block's start; an entry field names entry 0's copy, and entry i's is
+  i × STRIDE further on. The tile entry's u40 OFFSET and nested attribute
+  values are not `points_to` edges and stay hand-read (the spec is unchanged),
+  as FastFHIR decodes its relative codes by hand.
+  **Test** (`ife_runtime_tests`, `test_reference_fields_name_every_edge`,
+  which now takes all three corpus files on Bazel too):
+  - a walk driven only by the table, over each corpus file, finds both
+    witnesses holding on every edge;
+  - it reaches only blocks `generate_file_map` finds, and misses only tile
+    streams and nested attribute structures;
+  - the corpus exercises all 16 fields.
+
+  Red: counting entry fields from the entry, or dropping the nullable fields,
+  each fails it.
+  **Gate:** `--check` clean; the wire witness is unchanged; 23/23 normal and
+  ASan.
+- [x] **RB-3 — One walk, and the census.** ✅ 2026-09-28. FastFHIR's census
+  ported (`FF_Recovery.cpp` "PHASE 1" → `src/IFE_Recovery.cpp`, 822 lines, the
+  same order and names: `take_census`, `chain_hole`, `next_block_after`,
+  `derive`, `read_slots`, `settle`/`judge`, `children`, `attached`, `ask`,
+  `census()`, `scan()`, `find_gaps()`), public types in `include/IFE_Recovery.hpp`.
+  - **One walk.** `slots_of()` (`IFE_Primitives.hpp`) is the one reading of a
+    block's references; `generate_file_map` is rewritten on it and matches the
+    old implementation on all 38 603 maps (3 clean + every single-bit flip of
+    the corpus). Generated for it: `blocks::with_block(tag, …)` (the typed
+    handle for a run-time tag) and `entry_size_at(version)`.
+  - **Where IFE's wire differs** (each in the code at the point it differs):
+    a tile stream has no self-offset, so its witnesses are its placement (it
+    starts inside nothing, crosses nothing, meets a neighbour) and its frame; a
+    frame that took a flip leaves a frame-wide hole; nested attribute values may
+    share (exempt from H5); IFE's growing blocks are single, so one block's run
+    in a newer file is skew (FastFHIR needs two). The array stride is the one
+    the file's version writes.
+  - **Tests** (`ife_recovery_tests`, CMake + Bazel, FastFHIR's own shape):
+    `check_clean_census` over the corpus and the Builder slide (framed and
+    not); a newer writer's skew and its same-version control; FastFHIR's
+    `census_single_flip_sweep` — 47 744 flips, every point explained, every
+    damaged link opened. 1 s; 31 s under ASan.
+  - **Red:** no H5 contest → 464 damaged slots left closed; no lost-frame rule
+    → 120–160 damaged frames left closed per framed fixture; FastFHIR's
+    two-instance skew rule → the skew reads as holes.
+- [ ] **RB-4 — The header and the trusted extent.** The version and the extent
+  are decided first. Each header field gets a verdict:
+  - MAGIC and RECOVERY are constants, restored only when enough blocks show
+    the bytes are an Iris file;
+  - EXTENSION_MAJOR/MINOR must be one of the known versions;
+  - FILE_SIZE must equal the file's size;
+  - FILE_REVISION has no witness, so it is reported and never written;
+  - TILE_TABLE_OFFSET and METADATA_OFFSET are ordinary census slots.
+
+  **Tests:** the removed root cases (magic within the flip budget; beyond it,
+  and `NotAnIrisFile` writes nothing); every single flip in the header bytes.
+- [ ] **RB-5 — The solver, for blocks.**
+  - The cycle: candidates → significance radius → tree → components → accept →
+    decide.
+  - Arrays go through `derive` (STRIDE, COUNT, VersionSkew).
+  - **Tests carried from the removed suite:**
+    - one witness damaged per class;
+    - both witnesses lost, recovered from the predecessor's extent;
+    - a wrong-type reading (FastFHIR's F01 shape: METADATA's slot flipped onto
+      an innocent block);
+    - a contended repoint is never confident;
+    - generational holes recover from the root;
+    - damage is never silent;
+    - wire offsets never wrap a bounds check.
+- [ ] **RB-6 — Tile streams.**
+  - A tile entry's candidates are framed streams whose TILE_INDEX matches
+    exactly.
+  - A lost TILE_OFFSETS array is rebuilt from frames: the anchor; SIZE = the
+    next start − the anchor (a start is exact under any version, OD-R2); the
+    index = TILE_INDEX. Z_PLANES may not exceed its layer's.
+  - Unframed streams are reported, never repointed.
+  - **Tests:**
+    - a surviving frame rebuilds its entry;
+    - unframed corruption is reported;
+    - a flipped entry never names another tile's stream.
+- [ ] **RB-7 — Report and apply.**
+  - Each verdict carries its planned writes.
+  - `apply` writes into the target OD-R1 chooses: each group lands whole, is
+    read back, or rolls back.
+  - **Tests:**
+    - an out-of-range write aborts;
+    - recover → apply → recover reports everything Intact;
+    - Ambiguous and Unrecovered verdicts write nothing.
+- [ ] **RB-8 — Bench and calibration.**
+  - The bits→percent curve on the RB-0 fixture, counted in anchored units,
+    with misattachment asserted zero and the clean control unchanged.
+  - FastFHIR's constants (MAX_CHANCE 1/64, ACCEPT_ABS 32, ACCEPT_MARGIN 64,
+    K_BEST 256, MAX_COMPONENT 8) start as priors and are re-measured here.
+- [ ] **RB-9 — Docs.**
+  - `architecture.md` §3–§5 rewritten for the census, with the diagrams above.
+  - CLAUDE.md "Recovery" keeps the paid-for rules and drops the removed
+    engine's function names.
+  - README "Recovering a Damaged File" returns, with an example the README
+    gate compiles.
+
+### The removed engine's refinements, and where each lives now
+
+| IFE refinement | in the census design | kept by |
+|---|---|---|
+| root repair (`RootRepaired`) | header verdicts (FastFHIR §2.5) | RB-4 |
+| tag consensus (RC-8) | ranking whole branches over candidate types (FastFHIR §3 F01, §7) | RB-5 wrong-type test |
+| hole self-signature, band expansion | hole chaining, and one significance radius per slot (FastFHIR §3, §7.1) | RB-5 lost-block test |
+| one cost-ranked decision per edge | the tree and its components | RB-5 contended repoint |
+| TILE_INDEX matched exactly | a hard constraint on tile candidates | RB-6 |
+| in-place apply with rollback | per-group writes with rollback, into OD-R1's target | RB-7 |
+| geometry-bounded array walks (`readable_entries`) | `derive` | RB-5 |
+
+### Open decisions (for Ryan; the default lets work proceed)
+
+| id | question | default |
+|---|---|---|
+| OD-R1 | Where does `apply` write? FastFHIR copies the stream into a `std::vector`; a slide is GBs. | Into a writable mapping the caller supplies (a clone or copy of the file). Recovery never writes the source. |
+| OD-R2 | Density: a premise or a rule? | **Closed (Ryan, 2026-09-28): never a rule.** A newer file has gaps, by design, wherever an older reader under-counts a block that gained fields. Exact adjacency is used only after a predecessor whose extent is exact: a same-or-older-version file, or an array, byte array or stream. Otherwise its computed end is a lower bound, as FastFHIR's H3 treats it. |
+| OD-R3 | One parent per block and per stream (H5). The spec does not forbid two tile entries sharing a stream, such as a deduplicated blank tile. | RB-0 found no sharing. **Nested attribute values are exempt:** the format lets two share one structure, and `ife_runtime_tests` (`test_shared_nested_structures_are_validated_once`) requires readers to accept it. Default: H5 is a hard constraint on the 16 declared edges and on tile entries, plus a "shall not" for shared streams in the 1.1 draft. |
+| OD-R4 | FILE_REVISION implies in-place edits, which leave superseded blocks with valid witnesses. | Treat them as orphans; RB-5 adds a test that a superseded block is never attached. Revisit if revision is not a supported write mode. |
+| OD-R5 | The public shape. | FastFHIR's: `Recovery(const FileAccessInfo&)` with `census` / `recover` / `apply`, in `IFE_Recovery.hpp` (advanced tier). `RepairClass` becomes FastFHIR's seven: `HoleCorroborated` goes (lost blocks become anchors), and `RootRepaired` goes (the root gets header verdicts). |
+
+# ▶ RECOVERY WORK ORDERS — two-witness reconciliation + gap analysis, the FastFHIR REC-10…18 port (2026-08-28)
+
+Written 2026-08-28 after reading the last three FastFHIR commits
+(`../FastFHIR` — all three are about recovery) and this repository's existing
+scan-only `recover_file_structure`. The spec has designed the redundancy since
+1.0 — every block carries the universal header {VALIDATION == own offset, a
+RECOVERY tag sharing the 0x55 high byte}, and tile streams may carry a 40-bit
+self-offset frame — and the reader has always had half the machinery:
+`recover_file_structure` *finds* blocks; it never *reconciles a reference*.
+FastFHIR just built the missing half, twice: the two-witness reconciliation
+(P0-3 / REC-10…17) and the gap analysis that finds the block with **no
+surviving witness at all** (REC-18). IFE's redundancy is the same design — its
+`FileMap` is literally the model FastFHIR's `StreamMap` was written against —
+so this port is structural, not inventive.
+
+**Why now — the three FastFHIR commits, in order:**
+- `67f4d83` (2026-08-27) — archive recovery; in the same pass fixed two honesty
+  gaps (deserialize dropped 736 fields across 37 generated files; round-trip
+  "measured nothing" because `diff_doms({}, {})` is zero diffs).
+- `1c98659` (2026-08-27) — the REC-18 gap-analysis plan.
+- `6a56c2b` (2026-08-28) — the REC-18 implementation: extents for every map
+  entry, the containment rule, the Gap sweep, classification, the report
+  surface. Measured on clean Synthea streams: 60,664 / 67,057 / 65,414 entries,
+  **0 gaps, 0 overlaps**; eleven tests red-before/green-after; disabling the
+  extent model reddens 12 assertions across 6 suites. Two of the tests pin
+  that a hole names the RIGHT bytes, not merely that one appeared —
+  `holes_locate_and_size_every_entry_shape` and
+  `broken_blockref_still_locates_and_sizes_the_orphan` (the double-hit case:
+  both the parent reference AND the child VALIDATION destroyed — the highest
+  level of syntactic corruption, which destroys the redundancy itself).
+
+**The property this ports (FastFHIR P0-3).** One logical edge A→B (parent
+block A holds an offset to child block B) is stored twice, and a single
+corruption cannot reach both halves:
+
+| # | Witness | Where it lives in IFE | What it asserts |
+|---|---|---|---|
+| 1a | parent slot identity | the slot's fixed offset inside A (e.g. `TILE_TABLE::offset::CIPHER_OFFSET`) | *which* field of A this edge is — compile-time |
+| 1b | parent target | the u64 in that slot | *where* B is (absolute offset) |
+| 1c | parent expectation | the slot's compile-time child type (CIPHER_OFFSET → CIPHER, …) | *what* B must be — compiled in, uncorruptible |
+| 2a | child self-offset | B's VALIDATION (+0, u64) | where B thinks it is |
+| 2b | child identity | B's RECOVERY (+8, u16 0x55xx) | what B is |
+
+`validate_file_structure` reads all of these and uses them only to *reject* —
+at the moment it reports BAD_VALIDATION it is holding everything needed to
+repair the edge, and it throws that away. These orders stop discarding it.
+
+**The three damage cases** (REC-18's table, IFE's names):
+
+| damage | scan sees it? | graph walk reaches it? | verdict |
+|---|---|---|---|
+| parent slot flipped, child intact | yes | no | orphan — Corroborated (mode 1) |
+| child VALIDATION flipped, parent intact | **no** | yes (parent names it) | PositionRepaired |
+| **child VALIDATION flipped AND parent slot broken** | **no** | **no** | **invisible — a Hole; absence is the only evidence** |
+
+The third row is the orphaning case the tests must pin: a block with *neither*
+witness left is not a pointer problem, it is a *bytes* problem — every other
+block's extent is known, so the orphaned run is a hole, located and sized. A
+hole says *something of size N was here*, not what; it turns "invisible" into
+"located and sized", which is what a repair ranker needs to have a candidate
+position at all.
+
+**Read first**
+- `../FastFHIR/include/FF_Recovery.hpp` — the whole port in one header:
+  StreamMap (one map type, two producers), BlockRef, RepairClass, the
+  FF_RecoveryReport, Recovery, and the REC-17 threat-model boundary.
+- `../FastFHIR/src/FF_Recovery.cpp` — scan, reconciliation, `find_gaps`.
+- `../FastFHIR/tests/cpp/test_recovery.cpp` — every test below in its original
+  form, including the two-witness orphaning tests.
+- `../FastFHIR/TASKS.md` §P0-3 and §REC-18 — the governing principle and the
+  gap-analysis rationale. (REC-10…17 are deleted-as-done from TASKS.md;
+  `git log -S'REC-10' -- TASKS.md` finds the record.)
+- `src/IFE_Runtime.cpp` §Recovery — what IFE has today (scan-only, size 0
+  entries, no reconciliation).
+- `spec/ife_spec.adoc` §Universal Block Header, §Tile Frame, §Recovery Codes —
+  the redundancy the spec already promises.
+
+**Rules: the cross-pollination rules at §CROSS-POLLINATION WORK ORDERS apply
+unchanged** — one task ID per session, run *Locate* first and STOP on a
+mismatch, do not commit, never hand-edit `generated_source/` or
+`generated_docs/`, append-only is inviolable, and ⚠ marks a decision a flash
+model must not take alone. One rule this section adds: **every repair is
+reported, never silent** — a repaired file is not the same object as an intact
+one, and `apply()` is the only path that mutates.
+
+## Priority summary
+
+| ID | Priority | Task | Why | Status |
+|---|---|---|---|---|
+| RC-1 | **P0** | Two-witness reconciliation | `scan()` finds blocks; nobody reconciles a reference | ✅ engine + tests |
+| RC-2 | **P0** | Extent model + gap analysis | a block with BOTH witnesses destroyed is otherwise invisible | ✅ sweep + RC-2.4 |
+| RC-3 | **P0** | Orphaning tests | the two-corruption case is the one the current tests cannot express | ✅ written, green (RC-3.1…3.5) |
+| RC-4 | P1 | Report surface, wiring, boundary doc | repairs must be countable, wired, and honestly bounded | report + boundary ✅; wiring open |
+| RC-5 | P2 | Checksum footer | damage *detection* with no second witness — proves something changed, localizes nothing; the RC-1/RC-2 localizers need a detector to point at them | open |
+
+---
+
+## RC-1 — Two-witness reconciliation (P0)
+
+**Why.** `recover_file_structure` is a census, not a repair: it records every
+self-consistent block and returns nothing about *references*. FastFHIR's
+`recover()` reconciles every parent→child edge by whichever witness survives —
+child VALIDATION broken, parent names it (PositionRepaired); parent slot
+broken, a unique matching orphan corroborates it (Corroborated); child tag
+broken, the slot's compiled expectation rewrites it (TagRepaired); array
+extent broken, recomputed (ExtentDerived) — and reports a verdict per
+reference with the Hamming bit cost of the fix, never guessing: ≥2 live
+readings at equal cost is `Ambiguous`, nothing within budget is `Unrecovered`.
+
+**Status (2026-08-28).** The engine ships and is green under CMake — 17/17
+ctest including the RC-3 suite (generator `--validate`/`--check`; portability
+lint): the 18-edge walkers (RC-1.1), the scan+walk join with the orphan census
+(RC-1.2), the Hamming ranker (RC-1.3) and `apply()` (RC-1.4) live in
+`src/IFE_Recovery.cpp` / `include/IFE_Recovery.hpp`, and
+`tests/ife_recovery_tests.cpp` now executes every path — walkers, `recover()`,
+`classify()`, `hamming_cost()`, `apply()` and the gap sweep — on real corpus
+bytes (RC-3.1…3.5). Four engine defects found and fixed while writing those
+tests: `scan()` now notes the validated FILE_HEADER (its run previously read
+as a Hole on every clean file); `walk_attributes()` now slices the packed run
+by key+value per the runtime's contract (it had read nested offsets from key
+text); the entry-based walkers now store RELATIVE slots so `apply()`'s
+Corroborated write lands (it wrote at parent+absolute); `apply()` writes the
+tile slot as a u40 (a u64 write clobbered the adjacent u24 SIZE); and
+`classify()`'s tile branch now consults frame-witnessed orphans (the
+frame-survival rebuild was dead code), reporting Unrecovered when frame
+witnesses exist but none is within budget, and ranking them by hamming
+distance AND size — the entry's claimed extent must end at a claim boundary.
+Bazel is fixed and green: 16/16 `bazel test //...` (the missing declarations
+were `src/IFE_Common.hpp` in the `ife` library AND the example-runtime
+target, plus `src/IFE_Recovery.cpp` there — the earlier "skipped" reports
+were the transitive build failure, not environmental; the two
+`src/IFE_Common.hpp` declarations were removed again when the file was
+folded into `IFE_Primitives.hpp`).
+
+**Review pass (2026-08-28, same day).** A review of the branch plus an
+exhaustive damage sweep found four more defects, all now fixed and pinned;
+RC-2.4 and the RC-2.3 size floor landed in the same pass, so no sub-item is
+knowingly unimplemented any more.
+
+1. **Bounds checks that wrapped.** `__off + n <= __size` on wire offsets is
+   not a bounds check: NULL_OFFSET is all-ones and is what every unused slot
+   holds, so ONE flipped bit gives 0xFF…FE, `0xFF…FE + 10` wraps to 8, and
+   the engine read eight bytes from *before* the mapping (ASan; on an mmap'd
+   slide the base is page-aligned, so that is the previous page). Every guard
+   in the file now goes through `in_range()`, which subtracts.
+2. **`apply()` was not all-or-nothing.** It wrote as it went and refused
+   afterwards, leaving a half-repaired file — the one state its own contract
+   forbids. It is now plan-then-commit: the whole report is range-checked
+   before a byte is touched (`write_repair(..., commit=false)`).
+3. **`scan()` recorded entries past EOF.** Extents come from wire fields, so a
+   damaged ARRAY COUNT — or a tile entry naming an arbitrary 40-bit address —
+   put map entries, and the gap runs after them, outside the file. `claimable()`
+   now clamps; an OFFSET outside the file is not recorded at all. The overrun
+   is not lost: reporting it is `ExtentDerived`'s job.
+4. **The tile branch's frame subtraction underflowed.** `target - 5` on a
+   target below 5 gives all-ones — exactly the value an ABSENT witness holds —
+   so an entry corrupted to 4 was reported **Intact**. Red-green confirmed.
+
+Also this pass: `tests/ife_damage_sweep_tests.cpp` (the exhaustive sweep, new
+ctest + Bazel target, 14,475 single-site damages, clean under ASan+UBSan) and
+three regressions in the RC-3 suite. A `__out` parameter in the RC-3 helper
+was tripping the portability lint's SAL check; renamed.
+
+### Locate
+
+```bash
+cd /Users/ryanlandvater/GitHub/Iris-File-Extension
+grep -n "recover_file_structure" src/IFE_Runtime.cpp     # scan-only today
+grep -n "enum class RepairClass" ../FastFHIR/include/FF_Recovery.hpp
+grep -n "FF_RECOVERY_MAX_FLIPS" ../FastFHIR/include/FF_Recovery.hpp   # 8
+```
+
+**Expect:** IFE has one producer (the scan); FastFHIR has seven repair classes
+and a flip budget of 8.
+
+- [x] **RC-1.1 — Reference enumeration: the IFE edge inventory.** The
+      FastFHIR `BlockRef{parent, field, child, stored, expected}` needs an IFE
+      producer. The edges are the 18 parent→child references the spec defines;
+      the expected child tag of each slot is compile-time (1c). Enumerate from
+      the generated layer — slot offsets are `b::<Parent>::offset::<SLOT>` —
+      never a second literal table. The full inventory, which is also the
+      Locate ground truth for every test below:
+
+      | Parent | Slot / entry | Child | Notes |
+      |---|---|---|---|
+      | FILE_HEADER | `TILE_TABLE_OFFSET` | TILE_TABLE | required |
+      | FILE_HEADER | `METADATA_OFFSET` | METADATA | required |
+      | TILE_TABLE | `CIPHER_OFFSET` | CIPHER | nullable; NULL_OFFSET in every fixture to date |
+      | TILE_TABLE | `LAYER_EXTENTS_OFFSET` | LAYER_EXTENTS | array |
+      | TILE_TABLE | `TILE_OFFSETS_OFFSET` | TILE_OFFSETS | array |
+      | TILE_OFFSETS | `entry[i]` {OFFSET, SIZE} | TILE_PIXEL_DATA | stream; the entry is the stream's only extent witness; the optional TILE_FRAME is its second witness (index, not length) |
+      | METADATA | `ATTRIBUTES_OFFSET` | ATTRIBUTES | nullable |
+      | METADATA | `IMAGES_OFFSET` | IMAGES | array |
+      | METADATA | `ICC_COLOR_OFFSET` | ICC_PROFILE | byte array |
+      | METADATA | `ANNOTATIONS_OFFSET` | ANNOTATIONS | array |
+      | METADATA | `CLINICAL_OFFSET` | CLINICAL_METADATA | byte array |
+      | ATTRIBUTES | `SIZES_OFFSET` | ATTRIBUTE_SIZES | array |
+      | ATTRIBUTES | `BYTES_OFFSET` | ATTRIBUTE_BYTES | byte array |
+      | ATTRIBUTE_SIZES | `entry[i]` nested, KIND == ATTRIBUTE_NESTED | child ATTRIBUTES | the nested triple is three ordinary blocks |
+      | IMAGES | `entry[i]` BYTES_OFFSET | IMAGE_BYTES | |
+      | ANNOTATIONS | `entry[i]` BYTES_OFFSET | ANNOTATION_BYTES | |
+      | ANNOTATIONS | `GROUP_SIZES_OFFSET` | ANNOTATION_GROUP_SIZES | array |
+      | ANNOTATIONS | `GROUP_BYTES_OFFSET` | ANNOTATION_GROUP_BYTES | byte array |
+
+      **Done when:** on a clean `v1_slide()` every reference the fixture
+      actually encodes reports `Intact` at `bit_cost 0`, legal NULL slots
+      report *absence, not damage* (they must not fabricate references), and
+      the enumeration reuses the generated slot offsets — a new block type is
+      a compile error, not a silent gap.
+- [x] **RC-1.2 — Join with the scan: orphan test + classification.** Two
+      producers, one map type (the FastFHIR shape): `generate_file_map`'s walk
+      is the clean baseline; `recover_file_structure`'s scan is the recovery
+      producer — the census of *self-consistent* blocks. `recover()` runs both
+      and joins: an edge whose parent slot and child header disagree is
+      classified per the repair classes above; a self-consistent block no
+      intact slot names is an orphan (corroboration candidate). Scan entries
+      must carry the RC-2 extent model so the join can size orphans.
+
+      **Done when:** a 1-bit VALIDATION flip reports `PositionRepaired` at
+      `bit_cost 1`; a 1-bit parent-slot flip reports `Corroborated` at
+      `bit_cost 1`; a 1-bit tag flip reports `TagRepaired`; and on a clean
+      stream every verdict is `Intact` with zero fabricated references — the
+      FastFHIR D3/D4/D5 regression: inline scalar values, packed values and
+      legal null array entries must not invent edges or extents.
+- [x] **RC-1.3 — The Hamming ranker.** `popcount`-based, `constexpr`, budget 8
+      (FastFHIR's `FF_RECOVERY_MAX_FLIPS`): a candidate whose repair costs
+      more than 8 flips is not a hypothesis, it is a guess. `Ambiguous` when
+      ≥2 candidates tie within budget — reported with its candidates, never
+      picked; `Unrecovered` otherwise. Candidates come from (a) the orphan set
+      (mode 1) and (b) RC-2.4's holes — a hole of size N adjacent to an
+      unsatisfied slot is a position candidate.
+
+      **Done when:** FastFHIR's REC-12 unit cases (ported) pass, including the
+      equal-cost tie reporting `Ambiguous`, never a silent pick.
+- [x] **RC-1.4 — `apply()` — the only mutating path.** Takes the report,
+      writes back only the repairs it classes: the parent slot
+      (Corroborated), the child VALIDATION (PositionRepaired), the child
+      RECOVERY tag (TagRepaired), the array extent (ExtentDerived). Rebuilding
+      a tile-offsets entry from a surviving frame — the existing scan already
+      reads `TILE_INDEX`; move it from scan into this path. `recover_file_structure`
+      itself stays read-only, exactly as `FileMap` is today.
+
+      **Done when:** `apply()` is the only function in the repository that
+      writes recovered bytes; a report with zero repairs mutates nothing
+      (byte-identical buffer).
+
+---
+
+## RC-2 — Extent model + gap analysis: the block with no witness (P0)
+
+**Why.** The two-corruption case (child VALIDATION flipped AND parent slot
+broken) is invisible to scan and walk alike — the damage table above. It can
+only be found by **absence**: if every other block's extent is known, the
+bytes nothing claims are the lost block, located and sized. FastFHIR measured
+the arena tiling exact on 60k-entry streams (0 gaps, 0 overlaps once the
+containment rule landed; the single residual 352-byte gap was a header-only
+charge on the URL directory's entry payload — the rule that fixed it is
+RC-2.2). IFE's `generate_file_map` already computes most extents; the work is
+applying the same formulas to scan-found entries and adding the sweep.
+
+### Locate
+
+```bash
+cd /Users/ryanlandvater/GitHub/Iris-File-Extension
+grep -n "array_span\|blob_span" src/IFE_Runtime.cpp          # extent formulas, walk side
+grep -n "note(map, .*0)" src/IFE_Runtime.cpp                 # scan records size 0 today
+grep -n "header_size_v1_0\|header_size_v1_1" generated_source/IFE_Blocks.hpp   # version-skew source
+```
+
+**Expect:** the walk sizes everything, the scan sizes nothing, and two
+generated header sizes differ between 1.0 and 1.1 (TILE_TABLE 44→46, METADATA
+56→68) — the version-skew source.
+
+- [x] **RC-2.1 — Extents for every entry.** Scan-found blocks sized from their
+      own bytes, same formulas the walk uses: plain blocks `header_size`;
+      arrays `header_size + COUNT × STRIDE` (`array_span`); byte arrays
+      `header_size + COUNT` (`blob_span`); IMAGE_BYTES
+      `header_size + title_size + image_size`; TILE_FRAME
+      `TILE_PIXEL_DATA::header_size`. TILE_PIXEL_DATA is the one exception: a
+      stream has no header, its extent lives only in the tile-offsets entry
+      that addresses it — so in the scan, tile-stream bytes are sized *by the
+      entry* when the entry survives and read as a hole when it does not. That
+      is honest: a stream without its entry has no derivable length, and the
+      frame does not carry one.
+
+      **Done when:** the FastFHIR feasibility probe, ported as a test: on the
+      v1 fixture (every shape present), `Σ extent == file_size`, 0 gaps, 0
+      overlaps, 0 entries with no derivable size. If a gap shows up, it is an
+      extent-formula or fixture defect — find and fix it the way FastFHIR
+      found the URL directory entry table, and pin it with a test.
+- [x] **RC-2.2 — The containment rule.** Nothing double-counts. Inline arrays
+      (LAYER_EXTENTS, TILE_OFFSETS, ATTRIBUTE_SIZES, IMAGES, ANNOTATIONS,
+      ANNOTATION_GROUP_SIZES) are charged `header + COUNT × STRIDE`; the
+      blocks their entries *name* (IMAGE_BYTES, ANNOTATION_BYTES, nested
+      ATTRIBUTES triples) are separate entries charged separately. The frame
+      is a separate block with its own VALIDATION, charged its own size; the
+      stream it precedes is charged to the entry, not to the frame.
+
+      **Done when:** the tiling probe reports 0 overlaps; a double-count bug
+      in any of the six array shapes turns the probe red.
+- [x] **RC-2.3 — The sweep + classification.** One O(n) pass over the
+      offset-ordered map: every run `[cursor, next_offset)` nothing claims is
+      a gap. Classify, cheapest discriminator first:
+      1. **Version gate** — a gap can only be benign if a NEWER engine wrote
+         the file: `FILE_HEADER.EXTENSION_MAJOR/MINOR`. IFE is lucky here: the
+         1.1 block expansion (TILE_TABLE 44→46, METADATA 56→68) is the exact
+         skew this class exists for, and there are real 1.0/1.1 fixtures to
+         test against — FastFHIR's systematicity half is still untestable
+         there for lack of a genuinely newer stream.
+      2. **Systematicity** — a version delta trails *every* instance of a tag
+         at the same size; a hole is a one-off. Self-calibrating — the reader
+         cannot know the newer layout, but it can observe 84 tiles all trailing
+         the same run and conclude the delta rather than 84 holes.
+      3. **Size floor** — a hole must be ≥ the smallest block header. Never
+         decides alone.
+      `Hole` (damage), `VersionSkew` (benign), `Trailing` (after the last
+      entry). A same-version stream must **never** report skew — getting that
+      backwards reclassifies real damage as benign, which is strictly worse
+      than reporting nothing.
+
+      **Done when:** flipping one byte of a mid-file block opens exactly one
+      Hole at the right offset and size; a 1.0-sized reader over a 1.1 file
+      reports VersionSkew, never Hole; and the same-version-never-skew
+      assertion is red before the version gate exists.
+
+      **Status (2026-08-28):** `find_gaps()` ships — version gate
+      (`declared > VERSION_WRITTEN`), systematicity trail (2+ instances),
+      Trailing — but the size-floor sub-rule is not enforced (any
+      unattributed run, however small, classes as Hole). The probe clauses
+      above are now the green RC-3.1 + version-skew tests.
+- [x] **RC-2.4 — Feed the ranker.** A hole of size N adjacent to an
+      unsatisfied parent slot is a position candidate for that slot's child.
+      (FastFHIR marked REC-18.6 done and then corrected it in the 6a56c2b
+      message as still unbuilt — build it in from the start here.)
+
+      **Done when:** a two-witness-destroyed block is both reported as a Hole
+      (RC-2.3) and offered as a ranked candidate to RC-1.3, and `apply()`
+      restores the parent slot to it when the cost is within budget.
+
+      **Status (2026-08-28): implemented.** `classify()`'s both-witnesses-gone
+      branch ranks holes when — and only when — no surviving orphan is within
+      budget. **An orphan outranks a hole categorically**, never on bit
+      distance: an orphan is a block saying "I am here", a hole is only the
+      absence of one, and ranking them in one pool would let destroyed bytes
+      outbid an intact block on a closer bit pattern. RC-2.3's size floor is
+      load-bearing here and is now applied (a run smaller than the universal
+      block header is noise, not a position).
+
+      The verdict is its own class, **`HoleCorroborated`**, counted apart in
+      `RecoveryReport::hole_corroborated` — ⚠ this was a naming/semantics call
+      taken while implementing: reusing `Corroborated` would have conflated a
+      pointer restored to a *surviving* block with a pointer restored to
+      *destroyed bytes*, and the second is what this class is. `apply()`
+      writes the parent slot for both.
+
+      The repairs chain, which `test_hole_is_a_position_candidate` pins
+      end-to-end on cipher_iris: destroy a child's VALIDATION and one bit of
+      the parent slot → the block vanishes from the census, one Hole is
+      reported at its exact offset and extent, the edge is HoleCorroborated at
+      cost 1 → `apply()` restores the pointer → the second pass classes the
+      same edge PositionRepaired (the tag survived, so the parent-named
+      address recomputes VALIDATION) → `apply()` again, and the file re-tiles
+      with no gaps and every edge Intact.
+
+---
+
+## RC-3 — Orphaning tests (P0)
+
+**Why.** The current recovery tests damage one side and assert the scan still
+finds things (`test_recovery_finds_blocks_without_the_offset_graph`,
+`test_recovery_finds_tile_frames_and_rebuilds_entries`). The case the
+format's redundancy exists for — **a data block with neither witness left** —
+has no test, because the current API cannot express it. FastFHIR's
+`test_recovery.cpp` is the pattern: writer-produced fixtures, one damage per
+known edge, the repair asserted *and* reported with its class and bit cost,
+and a **non-zero lower bound on edges damaged** asserted before any recovery
+rate — a harness that corrupts nothing recovers everything (P0-2).
+
+### Locate
+
+```bash
+cd /Users/ryanlandvater/GitHub/Iris-File-Extension
+grep -n "recover" tests/ife_runtime_tests.cpp     # scan-only tests today
+ls tests/ife_recovery_tests.cpp 2>/dev/null || echo "no recovery tests yet (expected)"
+grep -n "holes_locate_and_size_every_entry_shape" ../FastFHIR/tests/cpp/test_recovery.cpp
+grep -n "broken_blockref_still_locates_and_sizes_the_orphan" ../FastFHIR/tests/cpp/test_recovery.cpp
+```
+
+**Expect:** IFE tests flip one byte; FastFHIR has a hole-location test and a
+both-witness-destroyed test to port. New file `tests/ife_recovery_tests.cpp`,
+built on the in-memory `v1_slide()` writer fixture (writer output, not
+hand-built buffers — the COV-1 reason).
+
+**Status (2026-08-28): written and green.** `tests/ife_recovery_tests.cpp`
+covers RC-3.1…3.5 (CMake 18/18 + Bazel 16/16; wiring: CMake target in
+tests/tests.cmake, Bazel cc_test in tests/tests.bzl). Fixtures: cipher_iris +
+v1_1 (clean baselines, 0 gaps), v1_0 (its frozen CLINICAL slot defect is
+pinned — the engine reports it exactly once, never silently — and its nested
+triple is the RC-3.3 nested victim). Zero-coverage paths closed with the
+suite: a damaged root (Hole at [0, root_extent), census-only recovery), the
+unframed tile-entry corruption (Intact + exact Hole at the stream), the
+VersionSkew positive direction (4-instance systematic delta, never Hole on a
+same-version stream), the exact ExtentDerived recompute, apply()'s
+out-of-range aborts, and the tiny-file scan. The engine fixes that landed
+with these tests are recorded in the RC-1 status block above.
+
+- [x] **RC-3.1 — Clean-stream zero-damage regression.** The full v1 fixture
+      walked by the new reconciliation: every encoded edge `Intact`, zero
+      holes, zero gaps, and — the regression that matters — **no fabricated
+      references**: legal NULL_OFFSET slots, packed attribute values, empty
+      arrays and the nested attribute chain must not invent edges or extents.
+
+      **Done when:** the clean fixture reports `intact == blocks_total`,
+      `holes == 0`, `gaps == 0`, and a reference-inventing bug in RC-1.2 turns
+      the test red.
+- [x] **RC-3.2 — One witness per class.** For each repair class: damage
+      **exactly one witness** of a known edge in the writer-produced fixture
+      and assert the edge is restored and reported with the expected class and
+      bit cost — VALIDATION flip → PositionRepaired @ 1; parent slot flip →
+      Corroborated @ 1; tag flip → TagRepaired; COUNT flip → ExtentDerived.
+      Assert a non-zero lower bound on edges damaged before asserting the
+      recovery rate: count the damages, prove ≥ 1 took.
+
+      **Done when:** one test per class, each red before the RC-1 code and
+      green after, each asserting class + bit cost, none passing on an
+      undamaged stream.
+- [x] **RC-3.3 — Both witnesses destroyed: the orphan, located and sized.**
+      The centerpiece. Destroy a block's VALIDATION **and** its parent's
+      reference — the two damage sites must be **distinct bytes**, because for
+      some references the slot address and the child's own offset coincide and
+      two `^= 0xFF` writes to one byte cancel, silently producing an
+      undamaged stream and a green-looking test (FastFHIR prints skip counters
+      exactly because that is how a test quietly stops testing anything).
+      Assert the precondition the test stands on: after damage, the block is
+      **not** in the scan — if it did not actually vanish, everything below
+      passes for the wrong reason. Then assert a Hole exists, at the lost
+      block's offset, sized to the lost block's extent. One victim per shape —
+      plain block, array, byte array, and a nested attribute triple — because
+      the extent rules differ per shape.
+
+      **Done when:** `holes_locate_and_size_every_entry_shape` and
+      `broken_blockref_still_locates_and_sizes_the_orphan`, ported and passing
+      over the v1 fixture; disabling the extent model or the sweep reddens
+      them.
+- [x] **RC-3.4 — Frame survival rebuilds the tile entry.** The IFE-only case
+      FastFHIR has no analog for: destroy a tile-offsets entry (the stream's
+      only extent witness) while its frame survives — the frame's 40-bit
+      VALIDATION and TILE_INDEX restore the entry's position and index.
+      Extent stays the codec's question: the repair restores the *reference*,
+      not the stream length.
+
+      **Done when:** the entry is rebuilt from the surviving frame with the
+      correct TILE_INDEX, reported as a repair, and a stream whose frame is
+      also destroyed is reported as a Hole, not guessed.
+- [x] **RC-3.5 — Never silent; red-green both ways.** Ambiguous ties reported
+      with candidates, never picked; Unrecovered edges reported, never
+      dropped; `apply()` on a zero-repair report mutates nothing. Then the
+      honesty gates: re-introducing a bug into the reconciliation, the extent
+      model, or the sweep turns a test red (FastFHIR: disabling the extent
+      model reddened 12 assertions across 6 suites), and a damaged-but-untested
+      edge count of zero fails the run.
+
+      **Done when:** every damage the tests inflict is either
+      repaired-and-reported or reported-unrecovered — nothing is both silent
+      and wrong — and each RC-1/RC-2 feature has its red-green pair.
+
+---
+
+## RC-4 — Report surface, wiring, boundary doc (P1)
+
+- [x] **RC-4.1 — The report.** FastFHIR's `FF_RecoveryReport` shape, beside
+      `FileMap` in `include/IrisFileExtension.hpp`: per-class counts
+      (`intact`, `corroborated`, `tag_repaired`, `position_repaired`,
+      `extent_derived`, `ambiguous`, `unrecovered`), `blocks_total`,
+      per-reference verdicts (parent, field, child, tag, class, bit_cost,
+      candidates), and the gap list with `holes`/`version_skew` counts.
+      `FileMap` gains the gap list the way `StreamMap` does. Counts
+      precomputed so a driver reports recovery without re-walking.
+
+      **Done when:** a driver prints "N blocks recovered / M total, H holes,
+      V version skew" with no new walks.
+- [ ] **RC-4.2 — Wire it.** CMake target + ctest, a Bazel `cc_test`, and the
+      corpus harness unions the recovery *report* into its walk the way it
+      already unions the scan types — real corpus bytes are the only place the
+      two-witness path is exercised at scale.
+
+      **Done when:** `ctest` and `bazel test //...` are green with the new
+      targets, and the corpus harness still passes with the union.
+
+      **Status (2026-08-28): one clause left.** `ife_recovery_tests` is a
+      CMake target and green under ctest, and a Bazel `cc_test` runs green
+      under `bazel test //...` (16/16). What remains: the corpus harness
+      does not yet union the recovery *report* (it already unions the scan
+      types).
+- [x] **RC-4.3 — The boundary, documented beside the code (REC-17).** The
+      threat model and the no-second-witness list go in
+      `include/IrisFileExtension.hpp` beside the declarations, so no consumer
+      reads the redundancy as a guarantee of total recoverability. IFE's list:
+      FILE_HEADER (magic, no VALIDATION — the root); inline attribute values
+      packed in ATTRIBUTE_BYTES (no header); leaf payload bytes (ICC_PROFILE,
+      CLINICAL_METADATA, IMAGE_BYTES, ANNOTATION_BYTES content — a repaired
+      block header does not recover the payload); TILE_PIXEL_DATA streams
+      (extent lives only in the entry; the frame carries index, not length);
+      both witnesses damaged on the same reference (a Hole: located and sized,
+      content gone); and **bit-flip only** — truncation, overwrite or memmove
+      damage defeats the ranker and is reported Ambiguous/Unrecovered, never
+      guessed.
+
+      **Done when:** the boundary is stated in the header beside the API it
+      bounds, and the RC-3 tests cite it.
+
+      **Status (2026-08-28):** the threat model and no-second-witness list
+      are documented in `include/IFE_Recovery.hpp` beside the API they bound
+      (value types beside `FileMap` in `IrisFileExtension.hpp`). The RC-3
+      tests exercise the boundary's no-second-witness cases — both-witness
+      damage reports a Hole or Unrecovered, never a guess.
+- [x] **RC-4.4 — Byte-level bit/offset machinery is TU-confined.** No bit or
+      offset *operation* is reachable through the public include chain.
+      Verified 2026-08-28: `IrisFileExtension.hpp` includes only std headers,
+      Iris-Headers' two type headers and the generated `IFE_Blocks.hpp` /
+      `IFE_Map.hpp` / `IFE_Window.hpp`; the generated `IFE_Blocks.hpp`
+      includes only `IFE_Bytes.hpp` (the byte-I/O utility). The offset math —
+      tag prefix, `compose_version`, header offsets, extent arithmetic — lives
+      in `IFE_Primitives.hpp`, which `IrisFileExtension.hpp` and
+      `IFE_Blocks.hpp` deliberately do NOT include: only the translation units
+      that do the math do (`generated_source/IFE_Blocks.cpp`,
+      `src/IFE_Runtime.cpp`, `src/IFE_Recovery.cpp`). The reader-policy
+      helpers (root bootstrap, map recording) live at the foot of
+      `IFE_Primitives.hpp` — `src/IFE_Common.hpp` was folded into it
+      (2026-08-28) — and remain out of the public chain. The public
+      surface carries the spec's compile-time offset
+      *constants* (`offset::SLOT`, `header_size` — witnesses 1a/1c), never
+      byte manipulation.
+
+---
+
+## RC-5 — Checksum footer (P2)
+
+**Why.** IFE has no whole-file integrity witness: `validate_file_structure`
+proves structure, the recovery localizers find damage once a scan or tiling
+suspicion exists, but nothing says *the file changed* — the redundancy is
+per-block, and a rewrite that preserves every VALIDATION word is invisible.
+FastFHIR's `FF_CHECKSUM` (`RECOVER_FF_CHECKSUM`, ×1 per bundle) is the
+reference: a footer that proves something changed and localizes nothing — the
+detector that hands RC-1/RC-2 a place to look. (FastFHIR threat model,
+FF_Recovery.hpp: "the checksum footer proves *something* changed; it
+localizes nothing.")
+
+- [ ] **RC-5.1 — Spec + wire.** A new spec block (tag `RECOVER_CHECKSUM`, a
+      BYTE_ARRAY or dedicated BLOCK primitive) appended at EOF; the checksum
+      covers the file's bytes up to the footer. A WIRE change: spec JSON +
+      witness refresh (`tools/refresh_witness.py`), new generated handle,
+      `entry_for`/`recovery_for`/`extent()` regenerate from the spec
+      automatically.
+- [ ] **RC-5.2 — Writer + reader.** The block writers stamp it on finalize;
+      `validate_file_structure` verifies it as the last deep check. Old
+      readers must tolerate the trailing block (gap analysis already classes
+      post-last-entry runs as Trailing, benign).
+- [ ] **RC-5.3 — Version story.** 1.1 is ratified; the footer is 1.2 material
+      (append-only, new tag, no shipped field touched).
+- [ ] **RC-5.4 — Tests.** Corpus fixtures + witness gain the footer; a
+      one-byte flip anywhere in the file trips the footer while the
+      structural validators may stay green — the exact case the per-block
+      redundancy cannot see.
+
+      **Done when:** a byte flipped in tile payload — where no VALIDATION
+      word exists — fails validation via the footer alone, and a clean file
+      passes.
+
+---
+
+## RC-6 — The FastFHIR REC-19 rewrite's lessons (P0) — ✅ DONE
+
+**Filed 2026-08-31, implemented the same session.** The FastFHIR recovery
+engine was rebuilt end-to-end under REC-19 after RC-1…RC-5 landed here
+(handoff rev 2, `../FastFHIR/handoff.md` §2; the rewrite itself was
+uncommitted there at the time of this port — the lessons, not the code, were
+ported). The measured defects that rewrite fixed existed in IFE's engine in
+the same shapes, and this order closes them:
+
+| FastFHIR defect | IFE symptom before RC-6 | RC-6 change |
+|---|---|---|
+| defects 2/5 — enumeration driven by the scan census alone; a VALIDATION-damaged block is absent from the census, so every reference FROM it is never enumerated, and the report shows zero failures | same: the walk's descent gate was `validate()`, so a child whose VALIDATION was the damaged half stopped the descent; its subtree was silently lost | walk driven by parent attestation; descent and census admission use FastFHIR's corroborated-tag rule (self-offset valid-or-within-budget AND the wire tag maps to the slot's declared type); a parent-attested block is admitted to the census map so its run stops tiling as a hole |
+| defect 1 — one-surviving-witness descent | the walk demanded a fully intact child | descent continues while the child's self-offset is merely within the flip budget (with the tag corroboration above) |
+| REC-19.2 — the loss must be visible | a lost subtree showed zero failures | `ProducerFailure{kind, at, expected, actual, why}` audit on `FileMap` and `RecoveryReport` (`ScanTagInvalid`, `VTableRecoveryMismatch`, `InvalidSelfRef`); every damaged ref the walk, the orphan pass, the reapply or the census sees is recorded |
+| REC-19.7 — the reapply loop | a repaired block's subtree stayed unenumerated until apply() + re-scan | after classification, every Corroborated / TagRepaired / PositionRepaired repair is re-enumerated under the corrected type behind the `refs_are_coherent` gate (wrong-turn-2: a wrong repair yields children with no surviving witness — the whole batch is dropped, never believed); Corroborated follows the ranker's candidate, not the rejected slot value (`repaired_target`) |
+| REC-19.4 — the census remainder | an orphaned parent's outgoing references were never enumerated | census blocks the walk never reached are enumerated under their own wire type |
+| REC-19.5 — parallel census | single-threaded byte walk | the signature pass is chunked across hardware-concurrency threads (sequential below 1 MiB, chunks overlap by HEADER_SIZE−1, duplicates dropped at the audit) |
+| REC-18.6 — sized evidence | any hole ≥ the header floor was a candidate for any type | a fixed-size expected type accepts only a hole whose length equals what it occupies at that position; variable-size types keep the floor |
+| wrong-turn-2's coherence gate | the reapply's verification was absent | `refs_are_coherent` checks every non-null child has a surviving witness before a corrected-type batch is believed |
+
+**New tests (RC-3.6):** `one_damaged_witness_costs_nothing` asserts the
+whole-report shape for both header halves — a one-bit VALIDATION flip loses
+no references, opens no hole, reports PositionRepaired, and is recorded on
+the audit; a one-bit RECOVERY-tag flip is TagRepaired and its subtree is
+re-enumerated by the reapply. The damage sweep (14,475 single-site damages)
+stays green under ASan+UBSan, and the clean-stream invariants (RC-3.1) did
+not move.
+
+**Also fixed on the way (latent, pre-existing):** `versioned_root` read the
+root's version fields unguarded on buffers too small to hold the header
+(caught by the tiny-file scan test under ASan); the walkers' array element
+loops were bounded by the stamped COUNT alone (a damaged COUNT drove entry
+reads past the mapping once the walk could descend into repairable arrays).
+
+---
+
+## RC-9 — Misattribution: the REC-23 delta (P0) — ✅ DONE
+
+**2026-09-09.** FastFHIR REC-23 (`f8fc0dc`) found that 11 of 206 `Corroborated`
+repoints attached the **wrong** block at 512 flips — not fabrication and not
+loss but *misattribution*, real data on the wrong parent, reading as perfectly
+valid. In 10 of 11 the true child's own witness was destroyed too, so the scan
+never listed it, some innocent orphan sat within budget, and a single candidate
+made the uniqueness test trivially true. **Uniqueness is a property of the
+search, not of the evidence** — and IFE's ranker had the identical semantics.
+
+### The locality premise does not transfer, and the corpus cannot tell you that
+
+REC-23.1 brackets a candidate between the nearest intact same-slot references
+**in parent order** (FastFHIR measured 1471/1472 monotonic). **Measured false
+for IFE.** Iris-Codec claims a tile's arena space with
+`offset.fetch_add(entry.size)` *after* compression returns
+(`../Iris-Codec/src/IrisCodecEncoder.cpp:751`), on `hardware_concurrency()`
+workers CAS-claiming one shared grid, so a stream's offset records **completion
+order, not tile order**:
+
+| threads | adjacent pairs ascending | correct repoints the bracket rejects |
+|---:|---:|---:|
+| 1 | 100.00% | 0.00% |
+| 8 | 57.76% | 60.32% |
+| 18 | 55.92% | **62.46%** |
+
+Widening does not rescue it — rank displacement is p50=5 but MAX=778 at 18
+threads, and the tail tracks scheduler stalls and the encoder's 500 MB
+`resize_file` write lock, none of it on the wire.
+
+**The corpus nearly confirmed the opposite:** the witnesses measure 87/87
+monotonic because the single-threaded snapshot writers produce them, not the
+encoder. On those same bytes the cross-parent families (`ATTRIBUTE_SIZES` and
+`ATTRIBUTE_BYTES` across three sibling `ATTRIBUTES` parents) already violate
+1 of 2 pairs. *Before porting a heuristic, ask which writer produced the layout
+it assumes.*
+
+- [x] **RC-9.1 — `TILE_INDEX` adjudication.** The frame's `TILE_INDEX` is an
+      exact identity witness for the one edge with a real misattribution
+      surface, and the engine already read it into `BlockRef::recovery` and
+      never consulted it: `classify()`'s tile branch ranked on hamming distance
+      and the claim boundary, both estimates of *where*, never statements of
+      *which*. A candidate whose frame names a different tile is now dropped.
+      **Narrowing only** — an unframed candidate is not evidence and survives,
+      so the filter removes wrong answers and never admits one the ranker
+      refused; emptying the pool yields `Unrecovered`, which is honest. **Exact
+      match, never hamming**: adjacent indices differ by one bit, so a distance
+      test over an identity re-admits the confusion it exists to remove. Read
+      from the bytes, not from `BlockRef::recovery` — `RecoveryCodes` is a u16
+      and narrows the u32, so two tiles 65,536 apart share a truncated index.
+- [x] **RC-9.2 — Exclusivity (REC-23.2), demote-only.** Repoints are picked per
+      reference and greedily, so two damaged slots could both take the cheapest
+      surviving block of their type and both report `Corroborated`. A contended
+      target now demotes every claimant to `Ambiguous`, carrying the contended
+      offset. An **Intact** edge stakes a claim too — both its witnesses agree
+      on the wire, where a repoint is one hypothesis about a damaged slot.
+      Verified first that a clean file names every child exactly once: the sole
+      corpus duplicate is the frozen v1.0 writer-defect slot (METADATA's 1.1
+      `CLINICAL_OFFSET` read on a 1.0 file, holding a real `ATTRIBUTES`
+      address), which classifies `Unrecovered` and stakes no claim.
+- [x] **RC-9.3 — A bound the frame path was missing.** `signature_matches`
+      guarantees only the five VALIDATION bytes are in the file, but
+      `TILE_INDEX` sits four bytes *behind* them, so an anchor at 5..8 with a
+      self-consistent u40 read before the mapping. The frame grows backward;
+      every read behind the anchor owes its own bound.
+
+**Tests.** `test_contended_repoint_is_never_confident` forces two same-typed
+edges onto one child and asserts neither claims it and `apply()` writes
+nothing. RC-3.5's tile case now asserts the stronger outcome — two entries
+corrupted to one equidistant value both recover **correctly**, where the engine
+previously abstained on both — and the ambiguity half it carried moved to a
+file that contradicts itself (both frames claiming one index). Both changes
+were confirmed red-green by neutering each in turn.
+
+**Verified.** ctest 18/18; `bazel test //:ife_recovery_tests
+//:ife_damage_sweep_tests` 2/2; both suites green under ASan+UBSan; sweep
+accounting unmoved (14,475 single-site damages, 269 hole repairs, 0 refused);
+clean baseline unchanged (108 references, 107 intact, 1 unrecovered, 0 holes) —
+the control that catches an accounting change wearing an improvement's clothes.
+
+**Also landed:** `ife_recovery_bench_tests` — the bits→percent recovery curve
+(the FastFHIR-benchmark Test 5 shape) run as an assertion on both build
+systems. It compares ANCHORED units so a child reattached elsewhere cannot pass
+as recovered, hashes content separately from identity, and asserts one
+contract: an edge whose child carries an identity witness never comes back
+naming a different real block. Its first cut asserted zero invention and zero
+content change and failed immediately — correctly, because most of what it was
+counting is damage this format never claimed to survive. What the two fixtures
+now show, side by side: a **framed** tile edge never misattaches at any damage
+level, while the **unframed** 1.0 fixture misattaches from four bits up. That
+comparison is the price of a frame, measured.
+
+---
+
+## RC-10 — Open recovery work (ordered by exposure)
+
+Filed 2026-09-09 out of the RC-9 session. Each item states what to change,
+where, and what evidence already exists — nothing here needs re-deriving.
+
+- [x] **RC-10.1 — The read path checks what `validate()` checks.** Measured
+      before changing anything, and the premise was worse than written. One
+      flipped bit in an `ICC_PROFILE` COUNT — both witnesses intact, recovery
+      correctly reporting 18/18 Intact — made `abstract_file_structure()` read
+      1 GB past an 832-byte file. So "demand the witness" alone would not have
+      fixed it: the missing check was the extent bound, which `validate()`
+      already had and the read path never called. A flip in `IMAGE_BYTES`
+      TITLE_SIZE was worse still — `validate_file_structure()` PASSED it,
+      because nothing bounded that block's payload.
+
+      What changed:
+
+      * **A generated handle's `operator bool` is `validate()` passing** —
+        both witnesses and every declared extent. The old bounds-only test is
+        `in_bounds()`, called explicitly by code that reads damaged files on
+        purpose: recovery, `generate_file_map`, `note_attributes`, and
+        `validate_deep`'s out-of-bounds test. The read path's hops already
+        read `if (!x) fail(x.validate())`, so they needed no change.
+      * **Optional slots go through `present()`**: NULL_OFFSET is absent,
+        anything else must validate or the read throws. The bool alone would
+        have made a damaged ICC profile silently absent.
+      * **`validate()` bounds `IMAGE_BYTES`' payload** — new
+        `PAYLOAD_OVERRUN`, computed from `extent()`, the one formula.
+        `store()`'s self-check window grew to match.
+      * **Three pre-existing faults the new read-path sweep found**, all
+        reachable on HEAD: the generated `fits()` computed
+        `__offset + __header_size`, which wraps for a flipped NULL_OFFSET slot
+        (0xFF..FE) and read before the mapping — now a subtraction, as
+        `BlockHeader::fits` already was; `generate_file_map` looped on a
+        damaged COUNT past EOF — now bounded by `ArrayHeader::readable()`,
+        geometry not count; and orientation was cast from the decoded float
+        into an enum of half BIT PATTERNS, so a clean 90-degree image read back
+        as enum 90 rather than `ORIENTATION_90` (0x55A0) and a damaged negative
+        angle was undefined behaviour — now the raw 16 bits.
+
+      Measured: `ife_damage_sweep_tests` drives every public read entry point
+      over all 14,475 single-site damages and every repaired copy — under
+      ASan+UBSan, zero errors (10,712 read, 3,763 refused). A 64-bit random
+      probe over both fixtures: zero errors; before the change it faulted on
+      its first trial. Controls unmoved: recovery sweep accounting identical,
+      bench output byte-identical, and `generate_file_map` plus the
+      abstraction of every clean fixture identical.
+
+      **The consequence to know about:** a structurally damaged file is now
+      REFUSED by `abstract_file_structure()` instead of opened — 58–65% of
+      one-bit trials throw. That is the honest answer, and `Recovery` +
+      `apply()` is how to reopen one. Iris-Codec opens slides through this
+      call without validating first (`IrisCodecSlide.cpp:216`), so it
+      inherits the refusal — RC-10.8.
+
+- [ ] **RC-10.2 — A content-level metric.** No IFE test compares recovered
+      *content* against a clean denominator; `ife_recovery_bench_tests` is
+      reference-anchored and hashes a child's extent, which is close but not
+      the leaves a reader actually returns. Extend it (or add a sibling) that
+      runs `abstract_file_structure()` over the repaired file and diffs the
+      attribute tree, image list and tile table against the clean run. This is
+      the test that would have caught FastFHIR's 20,057, and it is the gate
+      RC-10.1 needs to prove itself against.
+
+      Starting point: RC-10.1's probe flattened the abstraction to leaf
+      strings and diffed them against the clean run. It found 13 fabricated
+      leaves over 40 one-bit trials on the 1.0 witness, and at most 6 in any
+      single trial — against FastFHIR's 29,303 from ONE bit — but it did not
+      classify them. The expectation is that every one is an unwitnessed
+      inline scalar (the documented boundary); ASSERTING that is this item.
+      One 2-bit trial produced 3, so "at most one leaf per flipped bit" is
+      not a safe assertion.
+
+- [ ] **RC-10.3 — Iris-Codec must write tile frames. (Cross-repo; lockstep.)**
+      `TILE_INDEX` is the only identity witness in the format, and RC-9.1 makes
+      it decisive — but `../Iris-Codec/src/IrisCodecEncoder.cpp` contains no
+      `TilePixelDataCreateInfo` and no `TILE_INDEX` anywhere, so no real slide
+      carries one. The corpus writer does
+      (`tests/ife_corpus_writer_11.cpp`), which is why the 1.1 fixture proves
+      the mechanism while the 1.0 fixture shows what its absence costs. The IFE
+      half is done; this is the encoder half. Frames are optional by design, so
+      this is a writer policy decision, not a format change.
+
+- [ ] **RC-10.4 — Block edges have no identity witness. (P2, design.)** A
+      flipped offset landing on a valid block of the SAME type satisfies both
+      witnesses at the new address, so `classify()` reports `Intact` and is
+      right to — nothing on the wire contradicts it. Measured on the 1.0
+      witness: METADATA's `ATTRIBUTES` slot moving between its three sibling
+      `ATTRIBUTES` blocks. Closing this needs a third witness (a back-pointer,
+      or an index field of the kind `TILE_INDEX` already is for tiles), which
+      is a spec change and therefore append-only work. Until then the bench
+      test counts these as `blind` and does not assert on them.
+
+- [x] **RC-10.5 — Warnings on, both build systems.** `-Wall -Wextra -Wswitch`
+      (`/W4` on MSVC), added once per build system: `add_compile_options` at
+      directory scope in `CMakeLists.txt`, placed AFTER
+      `FetchContent_MakeAvailable(IrisHeaders)` so the Iris-Headers subproject
+      keeps its own flags, and appended to `_COPTS` in `BUILD.bazel`, which
+      every first-party target — the test suite included, via
+      `ife_tests(copts = ...)` — already threads. Deliberately NOT `-Werror`:
+      a compiler upgrade must not be able to break the build, which is how a
+      project ends up deleting the flags.
+
+      Eight first-party warnings surfaced and were fixed, none by suppression:
+
+      * `src/IFE_Recovery.cpp` — `audit_ref`'s `__base` and
+        `enumerate_file_header`'s `root` were unused **parameters**, so the
+        parameters are gone rather than voided. Each removal states its reason:
+        a `BlockRef` already carries both witnesses (re-reading the bytes would
+        let the audit and the enumeration disagree), and the root is at offset
+        0 by definition (the caller still builds the handle as its validity
+        gate, then has nothing to pass).
+      * `generated_source/IFE_Blocks.hpp` ×5 — `AttributeSizeEntry::nested`
+        had no default member initializer, so the ordinary `{key, value}`
+        construction was a `-Wmissing-field-initializers` site. Fixed in
+        `generator/emit/cpp.py`, never in the generated file; `nested` now
+        defaults like `KIND` already did.
+      * `tests/ife_recovery_tests.cpp` — `collect_victims`'s unused buffer
+        parameter, likewise removed.
+
+      **`-Wswitch` is a guard, not new coverage** — it is on by default in
+      clang and gcc. Naming it says a new `RepairClass`/`GapClass` member must
+      fail at compile time, and survives someone trimming `-Wall`. It only
+      bites where the code gives it something to bite, and the `GapClass`
+      tally in `recover()` was an if/else-if chain, invisible to it — exactly
+      the shape of the FastFHIR bug where a gap class was assigned and counted
+      by nobody. It is a `switch` now.
+
+      Red-green verified by probe, not assumed: appending an enumerator to
+      `RepairClass` warns at both switches (the tally and `plan_repair`), and
+      to `GapClass` at the new tally switch. Clean rebuild of both build
+      systems is warning-free; ctest 19/19, `bazel test //...` 17/17, sweep
+      accounting unmoved. Only clang was available locally — the gcc and MSVC
+      legs are on CI.
+
+- [x] **RC-10.6 — `HoleCandidate::word` deleted.** It stored `read(x)` — the
+      corrupted copy of an offset — and nothing read it. The word's only job is
+      to price how likely position `x` is to be a real block whose VALIDATION
+      was damaged, and that answer is `self_cost`, computed at admission; the
+      word itself is never a matching target, because the parent's damaged
+      offset is scored against `x`, which is exact. A field holding exactly the
+      value the engine must never compare against is how someone compares
+      against it later, so the field is gone and a comment in its place says
+      why. Verified behaviour-neutral by A/B: the sweep reports the same
+      14,475 damages / 1,573 holes / 216 hole repairs / 20 ambiguous / 0
+      refused with the field present and absent.
+
+- [ ] **RC-10.7 — Recovery's entry walkers bound the slot's START, not its
+      width.** `enumerate_images`, `enumerate_annotations`, the attribute
+      walker and the tile-offsets walker cap entries at
+      `(size - begin) / stride`. That keeps each entry's first byte in the
+      file, but a STRIDE narrower than the entry — reachable only under
+      multi-bit damage; the sweep's three single-site masks cannot narrow any
+      of these strides — reads up to `entry_size - stride` bytes past EOF.
+      Found by inspection while writing `ArrayHeader::readable()`, which is
+      the fix; not yet reproduced. Move the walkers onto it, and hold the
+      bench hash and sweep accounting identical while doing so.
+
+- [ ] **RC-10.8 — Iris-Codec now refuses damaged slides at open. (Cross-repo.)**
+      `__INTERNAL__Slide`'s constructor calls `abstract_file_structure()`
+      directly (`IrisCodecSlide.cpp:216`, reached from `IrisCodecCache.cpp:55`
+      with no `validate_file_structure` on that path). Since RC-10.1 that call
+      throws on a structurally damaged file instead of returning fabricated
+      values or faulting. Decide what a viewer does next: surface the
+      diagnostic, or offer `Recovery` + `apply()` on a copy and reopen.
+
+---
+
+## Not in scope (yet)
+
+IFE has no compact layout, so one FastFHIR piece does not port: REC-18.7's
+refusal of compact streams (nothing to refuse). Corruption *fuzzing* (TSan)
+and a corpus-scale damage harness stay on the release-order "Not blocking"
+list. The `../FastFHIR-benchmark` side of FastFHIR's same change set (F2/F3:
+corrupt_stream parent-slot tuples, edge-level fingerprints) has no IFE analog
+— there is no companion benchmark repository for IFE yet.
+
+# ▶ ZERO-COPY SPAN / CONST-LENS READ PATH — the FastFHIR pattern to follow (2026-08-19)
+
+FastFHIR completed this exact migration on 2026-08-19 (TASKS.md OPEN TOPIC §C);
+IFE serialization must adopt the same structure so the read path stays
+allocation-free and the "0 heap allocations / nanosecond reads" claim holds.
+**This is the reference implementation: `FastFHIR::reflected_fields_view()`
+returning `std::span<const FF_FieldInfo>` over a static table, and
+`Node::fields()` returning that span.** The old by-value
+`reflected_fields()` → `std::vector<FF_FieldInfo>` was deleted — every caller
+migrated, nothing needs an owning copy on the read path.
+
+### The rule
+
+**Read-path metadata and entry access is a const lens over resident memory:
+`std::span<const T>` over static (generated) or in-place (block) storage.
+Never materialize a `std::vector` per call on the read path.** Builder-side
+vectors that own data being *written* are fine — the migration is about reads.
+
+### What this looks like in IFE
+
+| Current IFE pattern | Must become | Notes |
+|---|---|---|
+| `generated_source/IFE_Blocks.hpp` — per-block static layout tables | `std::span<const T>` accessors over the static arrays (the FastFHIR `reflected_fields_view` shape) | tables are already static/constexpr; expose spans, never copy |
+| `include/IrisFileExtension.hpp` — `Layer = std::vector<TileEntry>`, `Layers = std::vector<Layer>`, `AttributeSet = std::vector<AttributeNode>` | lazy spans over the resident `Window` bytes (resident mode), owning vectors only where data must outlive the window | the `Window::__pages` cache mode legitimately owns; span-ify the resident path |
+| `src/IFE_Runtime.cpp` — per-call `std::vector<AttributeSlice> slices` | parse into spans over the block, or reuse one buffer — no per-call allocation | measured cost of the vector pattern in FastFHIR: ~65% of `entries()`'s time was per-element `push_back` machinery at `-O0`; at `-O3` it is still a real per-call allocation on a path documented allocation-free |
+| `const std::vector<T>& entries` in the generated `*CreateInfo` structs | keep (write side, owns data) — but read it back through spans | `store()` reads `vector::size()`; that is the builder, not the read path |
+
+### Why (numbers, FastFHIR 2026-08-19, 50.8 MiB bundle, min of 7)
+
+- `Bundle.entry.entries()`: 856 µs/call → **36 µs** at `-O3` after removing the
+  allocating reflection path (and the reflective walk: 0.75 → **0.60 µs/entry**
+  once `Node::fields()` stopped allocating per block).
+- `node_size()` was building an entire `std::vector` just to call `.size()` —
+  `FIELD_COUNT` is a compile-time constant. Now 17.5 ns/call.
+- The Debug-build trap applies here too: all these costs are ~10× higher at
+  `-O0` (FastFHIR's `ninja` preset is Debug). **Measure IFE reads against a
+  Release build** (`-DCMAKE_BUILD_TYPE=Release`) or every span decision will be
+  made on inflated numbers.
+
+### Checklist for IFE code
+
+- [ ] Block layout tables in `generated_source/IFE_Blocks.hpp` exposed as
+      `std::span<const T>` (generator change in `generator/emit/cpp.py`), never
+      returned by value.
+- [ ] Read path (`IFE_Runtime.cpp` / `IFE_Window.cpp`): no `std::vector`
+      constructed per call when the source data is resident-addressable.
+- [ ] `AttributeSlice` / tile-entry access goes through spans over the block,
+      not materialized `std::vector` layers.
+- [ ] Wire-format gate (if any) and the corpus harness measure against a
+      Release build.
+- [ ] Benchmark parity: any public API change (e.g. a function now returning
+      `std::span`) is noted for the companion benchmark repo.
+
+Reference commit context: FastFHIR `generator/emit/views.py` now emits only
+`reflected_fields_view` (span); `Node::fields()`, `ObjectHandle::fields()`,
+`MutableEntry::fields()` all return `std::span<const FF_FieldInfo>`; the
+allocating variants were deleted from the emitter. Copy that structure.
+
+---
+
+# ▶ RELEASE WORK ORDERS — start here
+
+Written 2026-08-18, after the Phase 6 audit corrected this document (three
+items were done and marked open; the "Phase 6 is DONE" label belonged to the
+generated-layer milestone inside it). These are what remain between here and
+a released 1.1.
+
+**Decisions taken with the owner, 2026-08-18** — do not re-litigate:
+
+* The release is gated on the corpus **harness**, not on full 18-block
+  coverage. Coverage keeps growing after the tag, with the gaps recorded.
+* Bindings follow the tag: Python first, then JS/WASM.
+* The 1.1 revision errata (the `ATTRIBUTE_SIZE` 6→7 correction) **stays out**
+  of the published document. `tests/wire/README.md` is its record.
+
+**Rules: the same ones as the cross-pollination orders below** — one task ID
+per session, run *Locate* first and STOP on a mismatch, do not commit, never
+hand-edit `generated_source/` or `generated_docs/`, append-only is inviolable,
+and ⚠ marks a decision a flash model must not take alone.
+
+## Priority summary
+
+| ID | Priority | Task | Why | Status |
+|---|---|---|---|---|
+| R-1 | **P0** | Build the corpus harness | Four tests eat the corpus; nothing checks it still contains what it claims | **done (2026-08-18)** |
+| R-2 | P1 | Close the reachable corpus gaps | All five missing blocks are writable today — the blocker was v1, now deleted | **done (2026-08-19) — 18 of 18** |
+| R-3 | P1 | Release 1.1 | No tag has ever been cut on this repository | open — R-3.4 done (2026-08-19); R-3.1 held, the document had a normative gap |
+| R-4 | P2 | Python bindings (pybind11) | Already specified in Phase 6; unblocked by the tag | open |
+| R-5 | P3 | JS/WASM binding surface | Transport exists; only the binding is missing | open |
+| R-6 | P2 | Expectations header for the 1.1 witness | 1.1's fields are pinned by digest and read by no test; the 1.0 pair is the pattern | open |
+
+---
+
+## R-1 — Build the corpus harness (P0) — ✅ DONE
+
+**Why.** `tests/corpus/manifest.json` declares, per fixture, which block types
+it covers. Nothing reads that claim. Four tests consume the fetched bytes as a
+fixture, so a fixture that quietly stopped containing annotations would keep
+every one of them green — which is exactly how `ANNOTATION_JPEG` was lost
+before. §Conformance corpus → Harness calls its step 4 the step that keeps
+this honest, and step 4 is the part that does not exist.
+
+**Read first**
+- §Conformance corpus → Harness — the five steps, which are the spec for this.
+- `tests/ife_runtime_tests.cpp` — the walk it already does over one fixture.
+- `tests/tests.cmake` — the corpus fetch, and how corpus-consuming targets are
+  declared.
+
+### Locate
+
+```bash
+cd /Users/ryanlandvater/GitHub/Iris-File-Extension
+ls tests/ife_corpus_tests.cpp 2>/dev/null || echo "no harness yet (expected)"
+grep -n "option(IFE_CORPUS" CMakeLists.txt tests/tests.cmake || echo "no opt-out yet (expected)"
+python3 -c "import json;print(list(json.load(open('tests/corpus/manifest.json'))))"
+```
+
+**Expect:** no harness, no `IFE_CORPUS` option, and two fixtures listed.
+
+### R-1.1 — Read the manifest from C++
+
+The harness must iterate the manifest, and this repository has no JSON library
+and wants none. Follow the precedent already in the tree: generate it.
+`tests/fixtures/build_future_spec.py` is generated at configure and gitignored;
+do the same here with a small script emitting a header of fixture names, sizes,
+digests and declared block types.
+
+**Done when:** a configure-time header lists both fixtures and their `blocks`
+arrays, and is gitignored rather than committed.
+
+### R-1.2 — The walk
+
+`tests/ife_corpus_tests.cpp`, one target, per fixture: map it with
+`IFE::Window::resident`; `validate_file_structure` must succeed; walk every
+`points_to` edge, confirming each block's recovery tag and that its
+`VALIDATION` word equals its own offset; record which of the 18 block types
+were reached.
+
+**Done when:** it passes over both fixtures and prints the block types observed.
+
+### R-1.3 — The honesty gate
+
+Compare observed against declared. A block the manifest **claims** and the walk
+does not reach is an **error** naming the fixture and the block. A block
+reached but not declared is also an error — the manifest is the record, so it
+must be updated rather than drift.
+
+**Done when:** deleting one entry from a fixture's `blocks` array turns the
+test red, and adding a bogus one turns it red the other way. Red-green both.
+
+### R-1.4 — Wire it
+
+CMake target + ctest, a Bazel `cc_test`, and the `-DIFE_CORPUS=OFF` opt-out the
+plan promises and nobody built. **The opt-out disables only this test target,
+never the fetch** — the oracle and the >4 GiB test depend on the snapshot.
+
+**Done when:** `ctest` is 15/15, `bazel test //...` is 13/13, and
+`cmake -DIFE_CORPUS=OFF` drops exactly one test and still configures.
+
+> **Status (2026-08-18): R-1 is DONE — R-1.1 through R-1.4.**
+> `tools/corpus_manifest_header.py` projects the committed manifest into a
+> gitignored header at configure (CMake) and by genrule (Bazel);
+> `tests/ife_corpus_tests.cpp` validates each slide fixture and walks it with
+> `generate_file_map` — the traversal that already exists, rather than a
+> second one to be wrong — then compares reached against declared in both
+> directions. `manifest_name()` is a switch with no `default`, so a new
+> `MapEntryType` is a compile error here rather than a silent pass.
+> `-DIFE_CORPUS=OFF` drops the test target only; the fetch is untouched and
+> the other three corpus tests still get their bytes. ctest 15/15, bazel
+> 13/13, `--validate`/`--check`/portability lint clean.
+>
+> **Two later corrections to what is described here** — see R-2's closeout: the
+> harness now unions `recover_file_structure` into the walk (a tile frame is
+> invisible to the offset graph), and it counts *observed* blocks rather than
+> declared ones (it briefly over-reported coverage for fixtures that failed to
+> load). What it still does not do is exercise each block's functions: that is
+> R-6.
+>
+> **It caught a real drift on its first run.** The snapshot fixture contains
+> `TILE_PIXEL_DATA` — `tests/ife_snapshot_writer.cpp` writes 16 B of pixel
+> data per tile across 84 tiles, and the tile-offsets entries address it —
+> and the manifest never declared it. The corpus therefore reaches **14 of
+> 18** block types, not the 13 recorded below, and the remaining gap is four
+> blocks rather than five. Manifest corrected in the same change. Red-greens
+> both ways: declaring a block the fixture lacks (`CLINICAL_METADATA`) errors
+> with "manifest declares … the walk never reached it"; undeclaring a real
+> one (`ICC_PROFILE`) errors with "the walk reached … which the manifest does
+> not declare".
+>
+> One manifest schema addition was needed: `kind` (`"slide"` or
+> `"fragment"`, defaulting to slide). `v1_tile_offsets_full_width.bin` is a
+> bare 32-byte `TILE_OFFSETS` block, not a file — it has no file header to
+> walk from, so it is size-checked and **excluded from coverage accounting**
+> rather than silently credited. The plan above assumed every fixture was a
+> whole slide; it is not.
+
+---
+
+## R-2 — Close the reachable corpus gaps (P1) — ✅ DONE
+
+> **Restructured 2026-08-18 (owner decision) — the corpus is a set of frozen
+> per-version witnesses, each covering everything its version defines.**
+> Not one moving file: the newest witness *is* the feature corpus while its
+> version is draft, and freezes when the version ratifies. The set grows; no
+> entry is ever rewritten, so the version trail is immutable and old-file /
+> new-reader stays provable against real bytes — which a corpus regenerated at
+> head would delete on its first regeneration (`ife_v1_oracle_tests` asserts
+> `declared == 0x00010000u` and reads every field through a handle built at the
+> version the file declares).
+>
+> **No split by tile encoding.** Measured across the whole field schema, the
+> only thing that varies with encoding is the `ENCODING` byte itself; nothing
+> else keys off it, and `CIPHER_OFFSET` is NULL for both JPEG and AVIF. A
+> `corpus_AVIF` would be structurally identical to `corpus_JPEG` but for one
+> enum byte, in a repository whose scope excludes compression. Real AVIF bytes
+> are Iris-Codec's evidence, not this layer's.
+>
+> **CIPHER (was R-2.2 ⚠) — resolved by isolation.** The encoding rule is
+> normative prose only; nothing in the validator enforces it. And the block is
+> content-free by design — "encoders write nothing beyond the universal header
+> and readers ignore its contents" — so a CIPHER fixture invents no payload.
+> What it cannot do is sit in a conformant JPEG witness, because
+> `CIPHER_OFFSET` shall be NULL_OFFSET unless `ENCODING` is
+> `TILE_ENCODING_IRIS`. So it gets its own file claiming IRIS, which confines
+> the unreal claim to one small fixture and leaves the witnesses realistic.
+>
+> **Built and verified (2026-08-18); hosted and green 2026-08-19:**
+>
+> | File | Bytes | sha256 | Covers |
+> |---|---|---|---|
+> | `v1_1_witness.test_slide` | 859 | `1293df66…` | 17 of 18 + `TILE_FRAME` |
+> | `v1_0_witness.test_slide` | 3151 | `aab8dec8…` | 16 — every 1.0 block but CIPHER |
+> | `cipher_iris.test_slide` | 869 | `90a36c79…` | all 18 + `TILE_FRAME` |
+>
+> Both validate; both byte-reproducible across runs. The earlier 574-byte
+> draft is superseded — do not host it.
+>
+> **A writer bug this caught, worth keeping.** `store()` for a tile frame takes
+> the **anchor** (the first byte of the stream), not the frame's own start:
+> `TILE_PIXEL_DATA::offset::VALIDATION` is **-5**, a displacement *behind* the
+> anchor, and the runtime builds the handle the same way. Passing the frame
+> start writes it five bytes early — which the recovery scan still accepts,
+> because a u40 storing its own position is self-consistent wherever it lands,
+> so the frame appeared "covered" while attached to no stream at all. It
+> surfaced only because the misplaced write landed inside the CIPHER block and
+> broke validation there. A presence-checking harness would never have caught
+> it; a function-checking one would.
+>
+> **Update (2026-08-18, later): the restructure is complete in the tree and
+> the corpus reaches 18 of 18 blocks.** Names settled as
+> `v1_0_witness` / `v1_1_witness` / `cipher_iris`, renamed across every test
+> source, `tests.bzl`, `tests/corpus/BUILD.bazel` and the docs; the manifest
+> gained `role` and now lists four fixtures.
+>
+> | Fixture | Bytes | sha256 | Blocks |
+> |---|---|---|---|
+> | `v1_0_witness.test_slide` | 3151 | `aab8dec8…` | 16 — every 1.0 block but CIPHER |
+> | `v1_1_witness.test_slide` | 859 | `1293df66…` | 17 + `TILE_FRAME` |
+> | `cipher_iris.test_slide` | 869 | `90a36c79…` | 18 + `TILE_FRAME` |
+>
+> The 1.0 witness gained the two annotation-group blocks (both 1.0 fields), so
+> `tests/ife_v1_fixture.hpp` gained `annotation_groups` — two groups of
+> different title lengths and member counts, because one group cannot prove the
+> byte run is sliced and equal-sized groups cannot prove the slice moves with
+> the entry. The oracle now *verifies* them rather than asserting their
+> absence: title and 24-bit members decoded out of the shared run at the
+> boundary each sizes entry declares, ending exactly at the run's end. Two
+> block counts in `ife_runtime_tests` moved 12→14 and 11→13.
+>
+> **A latent build defect surfaced doing it:** `ife_snapshot_writer` never
+> linked the baseline `IFE_Blocks.cpp`, so the target did not link at all. It
+> is `EXCLUDE_FROM_ALL` and nothing depends on it, so nobody had noticed.
+>
+> **ctest is 15/15; `bazel test //...` is red with a 404 until the three
+> objects are uploaded** — its genrule fetches into a fresh `RULEDIR` every
+> time and can never use the local cache, which is the same property that makes
+> it the honest check. CMake passes here only because `.deps/corpus` holds the
+> digest-matching objects.
+>
+> **Closed out 2026-08-19.** All three objects are hosted; `ctest` is 15/15 and
+> `bazel test //...` is 13/13 against them. Two defects surfaced during the
+> upload round-trip and are fixed:
+>
+> * The `ife_corpus_tests` Bazel target declared only two of the four fixtures
+>   as `data`, so two were absent from the runfiles tree. CMake had not caught
+>   it — it passes the corpus *directory*, so a new fixture needs no build
+>   change there, while Bazel builds runfiles from an explicit list. Recorded
+>   in `tests/corpus/README.md` as the third step of adding a fixture.
+> * **The harness counted declared blocks rather than observed ones**, so it
+>   printed "18 of 18" in the same run where two fixtures failed to open. The
+>   count now comes from what the walk reached; verified against a deliberately
+>   incomplete corpus, where it reports 16 of 18 and fails. A coverage gate that
+>   over-reports on failure is the exact defect the gate exists to prevent, and
+>   it was inside the gate.
+>
+> Also lost and restored in the same round-trip: `v1_tile_offsets_full_width.bin`
+> 404'd after the upload (the prefix appears to have been replaced rather than
+> added to). It is 32 bytes and the only fixture whose `u40`/`u24` fields have
+> every byte significant — in a normal small slide those high bytes are always
+> zero, so a truncating load or store reads back correctly and hides.
+>
+> **Optional values filled (2026-08-19).** Coverage of optional *blocks* was
+> already complete — all eight nullable offsets are reached — but every 1.1
+> optional *value* was sitting at its default, which for several of them is
+> indistinguishable from absence. The 1.1 witness now carries `TILE_LENGTH` 128
+> (zero and absence both mean 256, so an unset field cannot tell a decoder
+> honouring it from one assuming the default), layer `Z_PLANES` 3, per-stream
+> frame `Z_PLANES` varying 3/0/0, and one `NULL_TILE` slot so a sparse layer
+> exercises the sentinel. Verified by reading each back through the handles:
+> the 1.1 witness returns the set values and the **1.0 witness returns absent
+> for every one**, which is the version gate proven on real bytes rather than
+> only on the synthetic 200.0 fixture. Fixtures re-pinned — `v1_1_witness` 832 B
+> `e93a2018…`, `cipher_iris` 842 B `7ddfa5aa…` — and re-uploaded.
+>
+> Still uncovered by design: tile encodings other than JPEG, and
+> `clinical_encodings` values beyond `CLINICAL_HL7_V2`.
+>
+> **Still open:** R-1's harness checks block *presence*, not every function of
+> every block — it does not read any of the values above, so nothing would
+> notice if they regressed. The frame-anchor bug and this are the same gap:
+> R-6.
+
+> **Superseded:** the 1.0 witness is not yet comprehensive (16 of the 17 blocks
+> 1.0 defines — it lacks the annotation groups), and making it so touches
+> `tests/ife_v1_fixture.hpp`, which the oracle reads its expectations from.
+> The manifest needs `role`/`covers_version` and the renames. And R-1's harness
+> still checks block *presence*, not every function of every block.
+
+
+**The blocker recorded below is stale.** §Conformance corpus says the
+annotation-group blocks are "still blocked: no group writer". That was v1's
+writer, deleted in Phase 6. Verified 2026-08-18: `CipherCreateInfo`,
+`AnnotationGroupSizesCreateInfo`, `AnnotationGroupBytesCreateInfo`,
+`TilePixelDataCreateInfo` and `ClinicalMetadataCreateInfo` all exist in
+`generated_source/IFE_Blocks.hpp` and are used by `IFE_Blocks.cpp`. Every one
+of the five missing blocks is writable today. What is missing is a fixture
+generator, not a capability.
+
+### R-2.1 — A second fixture
+
+Extend `tests/ife_snapshot_writer.cpp` to emit a fixture carrying the four
+straightforward gaps: both annotation-group blocks, a framed
+`TILE_PIXEL_DATA`, and `CLINICAL_METADATA` (1.1, one per
+`clinical_encodings` value worth covering). Host it, add it to the manifest
+with size, digest and its `blocks` array.
+
+**Done when:** the R-1.3 gate observes all four in the new fixture, and the
+corpus reaches 17 of 18 block types — from 14, not the 13 the section below
+recorded before R-1's harness corrected it.
+
+> **Status (2026-08-18): R-2.1 is built and verified; it needs an upload.**
+> `tests/ife_corpus_writer_11.cpp` emits a 574-byte 1.1 fixture, sha256
+> `92869ecd6fb47a0b2e16071fb2a17e80492f0af4e10286c2dcf03113d8c423b3`, carrying
+> one named annotation group, an HL7 v2 clinical stream, and framed tile
+> streams. Verified against the real gate by placing it in `.deps/corpus/`
+> with its manifest entry staged — `fetch_corpus.py` takes a digest-matching
+> cached file without touching the network, so the whole path runs locally:
+> validation passes and **the corpus reaches 17 of 18 blocks plus
+> `TILE_FRAME`, from 14**. Two independent compilations produced byte-identical
+> output.
+>
+> **The manifest entry is deliberately NOT staged in the tree.** The file has
+> to be uploaded to `r2://ife-validation/spec-validation/` first; an entry
+> naming a URL that 404s fails `fetch_corpus.py`, which is a
+> `message(FATAL_ERROR)` at configure — it would break every build, not just
+> the corpus test. Entry is ready to paste once the object is live.
+>
+> **Two corrections to the task as written.**
+>
+> 1. *"Extend `tests/ife_snapshot_writer.cpp`"* is wrong. That writer is built
+>    against the **1.0 baseline** schema (`build_baseline_spec.py`) on purpose,
+>    so the snapshot is 1.0 bytes a 1.1 reader must cope with, and its content
+>    is pinned field-for-field to `tests/ife_v1_fixture.hpp` because the oracle
+>    reads its expectations from there. 1.1 content cannot come out of a 1.0
+>    schema, and adding it would break the oracle. Hence a second writer, built
+>    against the current layer.
+> 2. *The frame is invisible to the harness R-1 built.* `generate_file_map`
+>    walks the offset graph; a tile frame carries **no recovery tag** and is
+>    addressed backward from the stream it precedes, so only
+>    `recover_file_structure`'s signature match finds one. R-1's harness now
+>    unions both maps. That also means the corpus exercises the recovery path
+>    over real bytes, which nothing else did — on a healthy file recovery finds
+>    a subset of the graph (measured: 12 of 14 on the snapshot, missing
+>    `FILE_HEADER` and `TILE_PIXEL_DATA`, both untagged).
+>
+> One more false green caught in passing: the harness first reported "18 of
+> 18" with `CIPHER` still unreached, because it counted `TILE_FRAME` — a
+> prefix, not one of the 18 blocks — in a numerator whose denominator excluded
+> it. Now counted separately.
+
+### R-2.2 ⚠ — CIPHER needs a decision
+
+`CIPHER_OFFSET` **shall** be `NULL_OFFSET` unless the tile encoding is
+`TILE_ENCODING_IRIS`, and that encoding is "reserved, unused". A `CIPHER`
+fixture therefore has to claim an encoding no encoder produces — a
+conformant file that no real pipeline could have written. Either that is
+acceptable evidence, or `CIPHER` is recorded as permanently uncovered by real
+bytes and covered by the generated round-trip alone.
+
+**Produce the analysis and STOP.** This is a judgement about what the corpus
+is for, not a coding task.
+
+---
+
+## R-3 — Release 1.1 (P1)
+
+No tag has ever been cut on this repository, and no GitHub release exists on
+either remote. Everything below is release mechanics; none of it is blocked
+by R-2.
+
+### R-3.1 — Ratify the revision
+
+`spec/ife_header.json` carries 1.1 as `"status": "draft"` with no date. Set it
+ratified with an ISO date — `generator/validate.py` requires a date on a
+ratified revision, so the gate enforces this. The cover page and the revision
+history are generated from that entry.
+
+**Done when:** `python3 -m generator --validate` exits 0 and the rendered
+document's cover no longer says draft.
+
+### R-3.2 — Refresh the wire witness
+
+If the spec moved at all, `tools/refresh_witness.py` records the baseline in
+the same change. `--check` fails until it does.
+
+### R-3.3 — Publish the document
+
+`spec/build_document.sh` produces the PDF and HTML. Its three gates are the
+release gate for the document; the exit code is not enough, because
+Asciidoctor exits 0 on a missing include.
+
+### R-3.4 ⚠ — Release artifacts and a README claim
+
+The README states pre-compiled binaries are provided "for all major systems
+under the **releases tab**". No release exists, so that sentence is currently
+false. Either the release workflow builds those binaries or the README is
+corrected. **Decide before tagging** — shipping a first release that
+contradicts its own README is worse than shipping without binaries.
+
+**Exit:** a tag exists, the specification is published from the pipeline, and
+every claim the README makes about artifacts is true.
+
+> **Status (2026-08-19): R-3.4 is done; R-3.1 is deliberately held.**
+>
+> **A blocker this task did not record: the 1.1 document is normatively
+> incomplete.** `spec/ife_spec.adoc` carried three `TODO(draft)` comments —
+> AsciiDoc line comments, so they render as nothing and the published PDF
+> simply lacked the content. One was load-bearing: the document required "the
+> global tile index" in five clauses (`TILE_INDEX *shall* encode the global
+> tile index`; `The count *shall* equal the total number of global tile
+> indices derived from the layer extents array`) and defined it nowhere, while
+> Terms cross-referenced `<<ife-tile-offsets>>` for the axis — the very
+> section the TODO sat in front of. An implementer could not have written a
+> conformant encoder from the published document.
+>
+> **Closed.** `[[ife-tile-indexing]] ==== Global Tile Indexing` now states the
+> scheme, from the owner's own figure: indices ascend by layer and row-major
+> within a layer from the upper-left tile, _base_(_l_) is the tile count of
+> every preceding layer, and _G_(_l_, _x_, _y_) = _base_(_l_) + _y_ ×
+> X_TILES~_l_~ + _x_, with the inverse and the total stated as clauses. The
+> derivation is checked against real bytes rather than asserted: the snapshot
+> writer's extents are 2 × 2, 4 × 4 and 8 × 8 at ascending scale — 84 tiles,
+> the figure's exact geometry — so the worked table in the section (0–3, 4–19,
+> 20–83) is the corpus fixture's own indexing. Four cross-references that had
+> no target now resolve to it, including the Terms one, which also said
+> "global *slide* indexing scheme" for the term the document defines as
+> "global *tile* indexing scheme".
+>
+> **Still deferred, and not blocking:** the other two `TODO(draft)` markers —
+> Equations 2.1/2.2 (MpP and Mc normalization) and Figure 2.7 (slide space).
+> Both are a figure and its equations for rules the narrative already states
+> in prose beside the field and in Terms respectively, so the document is
+> complete without them and poorer for it. They want the v1.0 document, which
+> exists in no checkout here.
+>
+> **R-3.1 held by owner decision (2026-08-19):** the revision stays `draft`
+> until the migration above is reviewed. `spec/ife_header.json` is untouched,
+> so R-3.2 has nothing to refresh — the narrative is not part of the wire
+> witness, and `--validate`/`--check` are green without it.
+>
+> **R-3.4 is done, resolved the way the ⚠ asked: the workflow builds the
+> binaries.** `.github/workflows/release.yml` — `verify` → `package` →
+> `document` → `publish`, tag-triggered, with `workflow_dispatch` running
+> everything except publish so the pipeline can be exercised before the first
+> tag. Four archives: linux-x86_64, linux-arm64, macos-universal (one archive,
+> both architectures) and windows-x64, each an install tree plus LICENSE,
+> published with the specification PDF/HTML and a `SHA256SUMS`.
+>
+> Two pieces carry the reasoning rather than the YAML:
+>
+> * `tools/release_guard.py` — the tag, the declared version and the
+>   ratification status have to agree before a compiler runs, because the fix
+>   for a disagreement is a retag. It **refuses to release a draft**, so it
+>   fails today, by design and on purpose. Red-greened over seven cases
+>   (draft, ratified, `v1.1`, `v1.1.3`, wrong version, malformed tag, output
+>   emission). It also renders the release body from the revision summary, so
+>   the changelog is not typed a second time.
+> * `tools/package_smoke/` — a consumer of the *installed* package:
+>   `find_package(IrisFileExtension CONFIG)`, the umbrella header, and a call
+>   into the shared library. Nothing else in the tree ever links the shipped
+>   artifact — the tests and examples link the object library — so this is the
+>   only check that an archive is more than a correctly named tarball, and on
+>   MSVC the only place the DLL's import library is linked at all. It found a
+>   real one immediately: `BYTE` is `Iris::BYTE` to a consumer, unqualified
+>   only inside tests that bring their own using-directive.
+>
+> Verified locally on macOS end to end: configure → build → `cmake --install`
+> (10 files: 6 headers, 2 libraries, 2 package-config files) → smoke consumer
+> builds, links `@rpath/libIrisFileExtension.dylib`, and runs. The document
+> builds through all three of `build_document.sh`'s gates, HTML and PDF.
+>
+> **Unverified, and where the risk sits:** every platform but macOS-arm64. The
+> other three matrix legs, the Windows loader paths, `ubuntu-22.04-arm` as a
+> runner label, and the whole publish job have never executed. Run the
+> workflow by dispatch once before trusting it — that is what the dispatch
+> trigger is for. A Windows consumer also gets no `IFE_IMPORT_API`, so
+> `IFE_EXPORT` is empty rather than `dllimport` on that side of the install;
+> functions link through the import library regardless, but that is the corner
+> the smoke test is most likely to fail in first, and changing it is an
+> export-contract task, not a packaging one.
+
+---
+
+## R-4 — Python bindings (pybind11) (P2)
+
+Fully specified already in [§Phase 6](#phase-6--ecosystem-cutover--release) —
+bind the `Abstraction::` surface, ship behind its own CMake option, generate
+enum values and field keys from `spec/*.json` rather than restating them, and
+add a CI job, because a binding that is not built is a binding that is broken.
+Nothing about that analysis changed; it was waiting on the tag.
+
+---
+
+## R-5 — JS/WASM binding surface (P3)
+
+As R-4. The residency work is done — `IFE::Window`'s Emscripten branch fetches
+byte ranges on demand, and the `wasm` CI job compiles it — so what is missing
+is the binding, not the transport.
+
+---
+
+## R-6 — Give the 1.1 witness an expectations header (P2)
+
+**Scope, first, because the obvious reading is wrong.** This is *not* "read
+everything". Tile pixel streams are out of scope permanently: IFE references
+them in their on-disk compressed form and never interprets a byte, because
+compression is Iris-Codec's layer. The witness writer fills them with `0xCD`
+and nothing should ever look.
+
+What *is* in scope is the structural field values, and the precedent is already
+here: `ife_v1_oracle_tests` makes 106 assertions against
+`tests/ife_v1_fixture.hpp` — `encoding()`, `x_extent()`, per-layer
+`x_tiles()`/`scale()`, `microns_pixel()`, every annotation entry field, the ICC
+and attribute byte runs. Those accessors are generated in this repository; a
+wrong derived offset is this repository's defect to catch.
+
+**The gap.** That treatment stops at the 1.0 witness. The 1.1 witness has no
+expectations header, so everything 1.1 added is pinned by digest and read by
+nobody — including the optional values just written: `TILE_LENGTH` 128, layer
+`Z_PLANES` 3, per-stream frame `Z_PLANES` 3/0/0, one `NULL_TILE` slot,
+`MICRONS_PLANE`. A digest pin catches a change; it does not catch a *reader*
+that stops returning them correctly.
+
+**Shape.** A `tests/ife_v11_fixture.hpp` beside the 1.1 writer, declaring what
+that fixture contains, and a test asserting it — mirroring the 1.0 pair rather
+than inventing a second idiom. The assertions that matter most are the
+version-gated ones: every 1.1 field reads its value on the 1.1 witness and
+**absent** on the 1.0 witness. That pair is the bidirectional guarantee stated
+as a test instead of as prose.
+
+**The frame anchor is already covered (2026-08-19)** and is no longer part of
+this task. `ife_validation_tests.cpp` pins both failure modes on synthetic
+buffers, needing no fixture: storing the tile-offsets entry's own value in the
+VALIDATION slot (which `validate()` rejects), and storing a correct frame at
+the wrong place (which `validate()` cannot reject, because it is internally
+consistent — what catches it is validating at the offset the entry names).
+Both red-greened.
+
+**Done when:** every 1.1 field is asserted present-and-correct on the 1.1
+witness and absent on the 1.0 witness, and re-introducing the frame-anchor bug
+turns a test red.
+
+---
+
+## Not blocking the release
+
+Carried forward so they are not lost, none of them gating: corruption tests;
+diagnostics generated from the JSON's normative clauses; TSan and fuzzing; a
+fixture with real AVIF tile bytes. The Windows arena branch and the
+`METADATA_FREE_TEXT` question, both previously listed here, are closed — see
+[§Phase 6](#phase-6--ecosystem-cutover--release).
+
+---
+
+# ▶ CROSS-POLLINATION WORK ORDERS — all closed 2026-08-18
+
+Written 2026-08-18 after a joint review of this repository and FastFHIR
+(`../FastFHIR`), which share an architecture — offset-addressed blocks in a
+mapped arena, recovery tags, a Python generator emitting a gitignored C++
+layer, append-only wire ledgers — and have solved overlapping problems in
+different orders. Each repo has something the other is missing. **These are
+the items FastFHIR already has and this repository does not.** The reciprocal
+list lives at the top of `../FastFHIR/TASKS.md`.
+
+**All four are done (2026-08-18).** Kept for the rules block below, which
+the release orders above inherit, and for the record of what each bought.
+
+## Rules (override anything else in this file)
+
+1. **One task ID per session** (e.g. `XP-1.2`). Do not batch.
+2. **Run the *Locate* block first.** If its output does not match *Expect*,
+   **STOP** and report what you saw. A mismatch means the tree moved and the
+   task is stale — do not improvise.
+3. **Do not commit.** Leave changes in the working tree and report.
+4. **Never hand-edit `generated_source/` or `generated_docs/`.** Change the
+   emitter in `generator/emit/` and regenerate.
+5. **Never move, resize or retype a shipped field.** Append-only is the
+   invariant these tasks exist to *enforce*; a task that seems to require
+   breaking it is a task written wrong — stop and say so.
+6. A task is done only when every *Done when* criterion holds and the stated
+   command exits 0. Paste the output.
+7. ⚠ marks a decision a flash model must not make alone. Produce the analysis
+   and STOP.
+
+## Priority summary
+
+| ID | Priority | Task | Why | Status |
+|---|---|---|---|---|
+| XP-1 | **P0** | Port FastFHIR's wire witness → enforce append-only | The invariant every compatibility claim rests on is still unenforced | **done (2026-08-18)** |
+| XP-2 | **P1** | Rebuild `--check` on parity, not byte-equality | Phase 3 lists this as future work; XP-1 supplies the mechanism | **done (2026-08-18)** |
+| XP-3 | P2 | Port the determinism test | Generator reordering silently changes output today | **done (2026-08-18)** |
+| XP-4 | P2 | Port the dangling-view test | `ByteSpan` has the lifetime hazard the FastFHIR test was written for | **done (2026-08-18)** |
+
+---
+
+## XP-1 — Enforce append-only with a wire witness (P0)
+
+**Why first.** Phase 2 of this document says the append-only diff check is the
+one validator item never built, and calls it "the invariant every
+compatibility guarantee in this document rests on … still unenforced."
+FastFHIR built exactly this and it works. `--validate` currently checks only
+*within* one revision: it cannot see a 1.0 field being moved, resized or
+retyped, because that is a property of the **diff** between revisions.
+
+Today's session is the argument. The `ATTRIBUTE_SIZE` entry went from six
+bytes to seven deliberately, and nothing in the toolchain objected — the only
+thing that noticed was a hosted fixture failing to load, hours later. A
+witness would have said so at `--validate` time.
+
+**Read first**
+- `../FastFHIR/tests/generator/wire_witness.py` — the whole file. Its
+  docstring states the principle: the gate is wire stability, not C++ source
+  text identity.
+- `../FastFHIR/tests/generator/test_wire_format.py` — how `_check_permanence`
+  is used, and how a baseline is stored and refreshed.
+- `generator/validate.py` — where the new check joins the existing five.
+- This document's Phase 2, validator item 1.
+
+### Locate
+
+```bash
+cd /Users/ryanlandvater/GitHub/Iris-File-Extension
+grep -n "def validate" generator/validate.py | head
+ls tests/wire/ 2>/dev/null || echo "no tests/wire yet (expected)"
+python3 -m generator --validate | tail -1
+```
+
+**Expect:** `--validate` prints `generator: spec documents are consistent`,
+and `tests/wire/` does not exist.
+
+### XP-1.1 — Emit the witness — DONE
+
+Add `generator/witness.py` with one entry point:
+
+```python
+def witness(fields_doc, constants_doc, header_doc) -> dict
+```
+
+It returns **only what reaches the wire**, never C++ text:
+
+- `blocks` → for each block: `recovery_tag` value, `primitive`, and for each
+  version group the ordered list of `(field name, type or enum group, width,
+  offset)` derived through `generator.model.layout.derive_layout`.
+- `entries` → the same for every array block's entry, plus `entry_size` per
+  version group.
+- `enums` → every group's `underlying_type` and every member's name → value.
+- `constants` → every statically defined value's name → value.
+
+Derive offsets through `derive_layout`, never by re-deriving them here: a
+second derivation is a second thing to be wrong.
+
+**Done when:** `python3 -c "import json,generator.witness as w, ..."` prints a
+dict containing `ATTRIBUTE_SIZES.entry.KIND` at offset 6, width 1.
+
+### XP-1.2 — Commit the baseline — DONE (file written; commit pending — see status below)
+
+Write the witness for the current tree to `tests/wire/witness.json`,
+**committed** (unlike `generated_source/`, this is evidence, not output).
+Add a one-paragraph `tests/wire/README.md` stating: what the file is, that it
+is append-only evidence rather than a snapshot to refresh casually, and the
+exact command to refresh it deliberately.
+
+**Done when:** `tests/wire/witness.json` is committed and
+`git diff --stat` is clean after regenerating it.
+
+### XP-1.3 — Gate on it — DONE
+
+Add check 6 to `generator/validate.py`, run by `--validate`: recompute the
+witness and compare against `tests/wire/witness.json`. Report, per finding:
+
+- a field that **moved, changed width, or changed type** → error
+- a field or block that **disappeared** → error
+- an enum member whose **value changed** → error
+- anything **added** → accepted silently (that is the whole point)
+
+Adopt FastFHIR's `_check_permanence` shape rather than writing a new
+comparator — same rule, same wording, one fewer thing to disagree.
+
+**Done when:**
+```bash
+python3 -m generator --validate && echo GATE-GREEN
+```
+exits 0, and each of these red-greens (revert after each):
+- move a 1.0 field within a block → error names the field and both offsets
+- widen `KEY_SIZE` u16→u32 → error names the width change
+- append a new field to a `1.1` group → **passes**
+
+⚠ **XP-1.4 — the baseline's own history — DONE.** `witness.json` records today's
+tree, which already contains the deliberate 1.0 `ATTRIBUTE_SIZE` correction.
+The gate therefore starts from a state that itself broke append-only once.
+Record that in `tests/wire/README.md` in one sentence, with the commit hash,
+so a future reader does not conclude the invariant has held unbroken. Do not
+try to reconstruct a pre-correction baseline — the correction was deliberate
+and its record is `tests/wire/README.md`. (It was also carried as an
+erratum on the 1.1 revision in `spec/ife_header.json`; that was removed
+2026-08-18 by decision — the correction belongs to 1.0, not to 1.1, and the
+witness README is where a reader looking for the one append-only break will
+be.)
+
+> **Status (2026-08-18): XP-1 is DONE — XP-1.1 through XP-1.4.**
+> `generator/witness.py` derives the wire witness (blocks, entries, enums,
+> constants — only what reaches the stream, never C++ text) through
+> `generator.model.layout.derive_layout`; the baseline is committed evidence
+> at `tests/wire/witness.json` with `tests/wire/README.md` (which also
+> records the baseline's own history — the deliberate 1.0 `ATTRIBUTE_SIZE`
+> correction, commit `9e591fa`). Check 7 in `generator/validate.py` is the
+> gate: a shipped fact that moves, widens, retypes or disappears errors;
+> additions pass. Two extensions landed with it: `tools/refresh_witness.py`
+> refuses to record a wire break and prints what it records; `--validate`
+> warns (non-fatally) when the baseline lags the spec and `--check` fails
+> until the deliberate refresh lands — so a version bump carries its
+> baseline refresh in the same change. The baseline file is written but not
+> yet committed (work-order rule: leave changes in the working tree).
+
+---
+
+## XP-2 — Rebuild `--check` on parity, not byte-equality (P1)
+
+**Why.** Phase 3 already describes this: the current `--check` is exact
+character equivalence, so it flags every legitimate change — a version bump, a
+copyright year — as drift, and it still cannot answer "was this produced from
+the current spec?" XP-1 supplies the answer.
+
+**Depends on XP-1.**
+
+### XP-2.1 — ✅ DONE
+Embed the witness hash in each generated file's banner
+(`generator/emit/cpp.py::_banner`, `generator/emit/docs.py::_banner`).
+
+### XP-2.2 — ✅ DONE
+Change `--check` to compare the on-disk banner hash against a freshly computed
+witness hash, and drop the full-text diff.
+
+**Done when:** touching a comment in `generator/emit/cpp.py` and regenerating
+leaves `--check` green, while changing any field in `spec/ife_fields.json`
+turns it red. Both red-greened.
+
+> **Status (2026-08-18): XP-2 is DONE — XP-2.1 and XP-2.2.**
+> `witness_hash()` in `generator/witness.py` fingerprints the canonical
+> witness; every generated banner (C++ `//` and AsciiDoc `////`, both via
+> `_banner`) carries `Wire witness: sha256 <hex>`. `--check` is now parity,
+> not byte-equality: it extracts each on-disk banner's hash and compares it
+> against a fresh computation — a comment edit in an emitter no longer flags
+> as drift, a file produced from a different spec does. The full-text diff is
+> dropped; missing files, orphans, and the stale-evidence promotion from XP-1
+> remain. One banner-less file is exempt by design: `attributes.adoc` is the
+> AsciiDoc document header and cannot carry a comment block. Red-greens
+> verified: emitter comment change + regenerate → `--check` green with the
+> hash unchanged; spec field change → `--check` red (both via the stale
+> evidence promotion and, with the baseline refreshed, via banner-hash
+> mismatch naming every drifted file).
+
+---
+
+## XP-3 — Port the determinism test (P2) — ✅ DONE
+
+FastFHIR has `tests/generator/test_determinism.py`; this repository asserts
+byte-stable regeneration in prose only. Add `tests/generator/test_determinism.py`
+running the generator twice into two temp dirs and comparing.
+
+**Done when:** the test passes, and passes again with `PYTHONHASHSEED=0` and
+`PYTHONHASHSEED=1` — the seeds are the point, since dict ordering is where
+non-determinism enters.
+
+> **Status (2026-08-18): XP-3 is DONE.** `tests/generator/test_determinism.py`
+> runs the generator twice into separate trees and compares every emitted
+> file with `filecmp` — stdlib-only, like the generator, and collectable by
+> pytest should one join the toolchain. Wired into ctest as
+> `ife_generator_determinism` and into CI under `PYTHONHASHSEED=0` and `=1`
+> (the seeds propagate to the generator subprocess). Verified green under
+> all three environments — the emitters iterate insertion-ordered dicts,
+> never hash-ordered sets, so no non-determinism was found to fix.
+
+---
+
+## XP-4 — Port the dangling-view test (P2) — ✅ DONE
+
+FastFHIR has `tests/generator/test_no_dangling_views.py`. This repository has
+the same hazard and no test: `IFE::ByteSpan` and every accessor returning one
+point into a caller-owned mapping, and `Abstraction::AttributeNode::value`
+copies while `bytes()` does not.
+
+Add `tests/ife_lifetime_tests.cpp` asserting, under ASan, that no API returns a
+view outliving the buffer it was built from. **Contract correction
+(2026-08-18): the abstraction reads over a lens of the caller's mapping, as
+FastFHIR reads over its arena — the caller keeps the mapping (VMA) alive, and
+views into it are the design, not a hazard. The hazard the test guards is a
+view bound to a *temporary*, which dies before the tree is walked.**
+
+**Done when:** the test passes under `-fsanitize=address` and fails when a
+`std::string` copy in `IFE_Runtime.cpp` is deliberately changed to a view.
+
+> **Status (2026-08-18): XP-4 is DONE.** `tests/ife_lifetime_tests.cpp` builds
+> the abstraction over the corpus snapshot's heap mapping, keeps the mapping
+> alive (the lens contract), and walks every string the tree keeps with value
+> checks against `v1_fixture::expectations()`. Passes in the normal build and
+> under `-fsanitize=address,undefined` (14/14 ctest). Red-greens under the
+> corrected contract: changing `AttributeNode::value` to a view *into the
+> mapping* passes — views are the design; changing it to a view *bound to a
+> temporary* fails, via corrupted values caught by the value checks — exactly
+> the FastFHIR symptom class ("the store pass read freed memory… produced
+> non-UTF-8 bytes") — because the temporary's freed block is reused rather
+> than left poisoned. Both mutations reverted; the runtime files are pristine.
+
+---
+
+
+> **Status (2026-08-18).** The **generated layer is complete**: it reads,
+> validates, maps, recovers and writes all 18 block types, round-tripped
+> through `IFE_Runtime`; function coverage is 100% in `IFE_Blocks.cpp` and
+> `IFE_Validation.cpp`; 14/14 ctest on macOS in Release and ASan+UBSan, on
+> both byte orders. That milestone is the `src/IrisCodecExtension.*`
+> retirement — Phase 6 execution plan, tasks 6.1–6.7 — and an earlier
+> revision of this note called it "Phase 6 is DONE", which conflated it with
+> the phase that contains it.
+>
+> **Phase 6 itself is not done.** Its scope is the ecosystem, and four items
+> are open: the conformance corpus harness, Python bindings, the JS/WASM
+> binding surface, and the release. See
+> [§Phase 6](#phase-6--ecosystem-cutover--release), which is accurate as of
+> this date.
+>
+> Gates in force: `--validate`, `--check`, the wire witness, the
+> exported-symbol check, the corpus digest fetch, and the test binaries under
+> ASan+UBSan, on both byte orders.
+>
+> **Broad plan below.** Each phase below gets a granular checklist
+> (`plans/phase-N-*.md`) during a refinement pass **before** implementation
+> begins. Implementation tasks are then executed by directed (flash-class)
+> models working from those checklists; this document is the map, not the
+> task list. Phase 4's refinement pass was executed inline and is complete
+> (see "Phase 4 implementation plan"). The cross-pollination work orders at
+> the top of this document (XP-1–XP-4) are all closed; the pending work is
+> the open Phase 6 items.
+
+## Objective
+
+IFE is specified by a **JSON specification document** that is the single
+source of truth for:
+
+1. **The C++ serialization layer** — memory layouts, offsets, enumerations,
+   validation and recovery tables are *generated*, never hand-written.
+2. **The specification document** — a hand-authored *spec-basis* Markdown
+   supplies the narrative (purpose, definitions, design rationale, prose about
+   sentinels like `NULL_OFFSET`, figures); all layout tables, enumeration
+   tables, and per-block sections are generated from the JSON and interleaved
+   at build time — via AsciiDoc's native `include::`, the mechanism Khronos
+   uses for the Vulkan specification — to produce PDF and HTML output.
+3. **Language bindings** — Python and JavaScript/WASM surfaces are generated
+   or generator-assisted, not hand-maintained.
+
+## Guiding principles
+
+* **Schema over hand-written.** The format is re-expressed as a schema
+  informed by FastFHIR, eliminating the hand-written byte-offset vtables and
+  enumeration tables. Where the refactoring surfaces a **documentation**
+  defect (e.g. sentinel errata in the published tables, where the code was
+  right), it is corrected deliberately with the rationale recorded. A
+  *layout* defect cannot be corrected — the append-only invariant forbids
+  moving a shipped field. It can only be deprecated and superseded by an
+  appended field.
+* **One source of truth.** After cutover there is no hand-written byte
+  offset, enum value, or layout table anywhere — not in C++, not in the spec
+  document, not in bindings.
+* **Append-only is inviolable — this is the load-bearing invariant.** No
+  version, major or minor, ever moves, resizes, retypes or removes an
+  existing field. **We only add.** A field may be *deprecated* — readers
+  ignore it, writers stop populating it — but **its slot stays, forever**.
+  Everything else follows from this: the format is **bidirectionally
+  compatible always**, not merely within a lineage; any reader can read any
+  file to the extent of the fields it knows; and no version bump, of any
+  kind, can ever require another migration like this one. Versioning is
+  carried as schema machinery (per-field `since`, arrays storing their
+  encoding-time stride) precisely so that adding is the only available
+  move.
+* **The schema is capped, permanently.** It describes what a byte **is**; it
+  never describes what a program should **do**. This is a hard boundary, not
+  a preference — the whole design depends on the description language staying
+  weak. Rich specification languages are a well-documented dead end: ASN.1
+  made every parser a security liability for decades on the strength of
+  variable-length everything, optional fields, and multiple valid encodings
+  of the same value. Pressure to add "just one feature" is the main long-term
+  threat to this architecture, so the boundary is written down rather than
+  remembered.
+
+  **Permitted, and this is the whole list:** a field's name, its scalar type
+  or enum reference, and the version group that introduced it; offset linkage
+  (`points_to`, `nullable`); a constant a field always holds; the primitive a
+  block derives from and its recovery tag; documentation (`description`,
+  `errata`, `deprecated`); and validation predicates drawn from a **closed
+  vocabulary** — range, enum membership, ordering, non-null — with no
+  expression syntax.
+
+  **Forbidden, permanently:** expressions or arithmetic of any kind;
+  conditionals, so no field's presence, type or width may ever depend on
+  another field's value; computed lengths — a length is a field, or it is
+  `STRIDE`/`COUNT`, never a formula; literal offsets or sizes (the derivation
+  rule); alignment or padding directives (packing is dense, everywhere);
+  byte-order overrides (little endian, always); anything describing runtime
+  behaviour — caching, threading, I/O, recovery policy; and any type whose
+  width is not derivable from the schema alone, which is why there is no
+  `string` type.
+
+  **When a rule will not fit:** it stays in the specification prose and is
+  hand-written into the validation layer. That is the designed escape valve
+  and using it is not a failure. The moment a proposal needs `if`, the answer
+  is no.
+
+* **Modularity is preserved.** This repository defines structure and
+  validation; Iris-Codec implements compression and the user-facing API.
+  The cutover is coordinated with Iris-Codec, but the boundary does not
+  move. Generated artifacts are never committed: they are regenerated into
+  `generated_source/` (gitignored) by the stdlib-only
+  `generator/` at configure time whenever absent. Downstream consumers need
+  Python 3 (stdlib only) at configure time and nothing more.
+* **Recoverability is a feature.** v1's self-validating blocks (offset
+  validation + recovery tags) made deep validation and corruption recovery
+  trivial. The schema keeps and strengthens this (universal block header,
+  unique recovery tags sharing the high-entropy `0x55` prefix that makes a
+  recovery scan's false-positive rate negligible).
+
+## Phase overview
+
+| Phase | Deliverable | Depends on |
+|------:|-------------|-----------|
+| 1 | Schema design decisions (`spec/DESIGN.md`) | — |
+| 2 | `spec/ife_fields.json` + `spec/ife_constants.json` + stdlib spec validator | 1 |
+| 3 | Generator `generator/` (`python -m generator`) → `generated_source/` (gitignored, regenerated at configure) | 2 |
+| 4 | Generated runtime: serialization, deserialization, validation, recovery | 3 |
+| 5 | Spec document pipeline: AsciiDoc narrative + generated `include::` files → PDF/HTML | 2 (parallel with 3–4) |
+| 6 | Bindings, tooling, corpus, downstream (Iris-Codec) cutover, release | 4, 5 |
+
+---
+
+## Phase 1 — Schema design
+
+Decide, and record with rationale in `spec/DESIGN.md`, everything the JSON
+spec will encode. Broad checklist:
+
+- [x] **Universal block header — settled (4.0-G/H).** 10 B
+      (`VALIDATION` u64 + `RECOVERY` u16) on every data-block, and **the file
+      header remains the special case** exactly as shipped: it opens with
+      `MAGIC` + `RECOVERY` and carries no `VALIDATION`. Byte-blob arrays add
+      only `COUNT`; typed-entry arrays add `STRIDE` + `COUNT`. The format is
+      frozen at shipped 1.0.
+- [x] **File identification — settled (4.0-G).** As shipped: `MAGIC`
+      (`0x49726973`) at byte 0, `RECOVERY` (`RECOVER_FILE_HEADER`) at byte 4 —
+      the two checks `src/IrisCodecExtension.cpp:275-282` already performs.
+      No older-file class exists to distinguish.
+- [x] **Version encoding — settled (4.0-G/H).** As shipped: `EXTENSION_MAJOR`
+      @14 and `EXTENSION_MINOR` @16 **inside `FILE_HEADER`**, composed as
+      `major<<16 | minor`. Because append-only is never broken, **any** newer
+      file — minor or major — stays structurally readable to the extent of the
+      fields the reader knows: read the known prefix and **warn**
+      (`src/IrisCodecExtension.cpp:853-865`). Structural rejection is never
+      necessary and must not be added. A major bump may still signal
+      *semantic* incompatibility (a newly required block an old reader cannot
+      act on) — a policy judgement for the consuming application, not a
+      parsing failure. See "Version gating — the v1 mechanism,
+      reverse-engineered".
+- [x] **Recovery-tag space — settled (4.0-A).** v1's `0x55xx` high-entropy
+      convention carries forward unchanged; the tag list stays flat. No
+      partitioned ranges and no array bit — see 4.0-A for the four reasons.
+- [x] **Array subsystem — settled (primitives + 4.0-H).** Two array
+      primitives, not one: `array` (`STRIDE` + `COUNT`, stride stored because
+      it can vary) and `byte_array` (`COUNT` only, stride intrinsically 1).
+      v1's externally-sliced byte arrays are **kept** as shipped — the
+      format is frozen at 1.0. See "Primitive block types".
+- [x] **Field type system — settled.** Vocabulary as shipped: `u8`–`u64`
+      including the packed widths `u24` and `u40`, plus `f32`/`f64`; `f16` is
+      declared but unused and must raise `SpecError` if ever referenced
+      (4.0-E). **Dense packing — no alignment padding anywhere**: a field
+      begins at the cumulative width of its predecessors, which is why
+      `FILE_SIZE` sits at an unaligned offset in the shipped root and why
+      4.1's primitives are `memcpy`-only (an aligned-load implementation
+      would be undefined behaviour here). **Always little endian on disk**,
+      at every version: a big-endian host byte-swaps on load and store, which
+      is what the `__BE_*` half of `src/IrisCodecExtension.cpp:125-177`
+      exists for. Both statements are normative and belong in the spec
+      document.
+- [x] **Block inventory — settled (4.0-G/H).** All 16 blocks carry into the
+      schema exactly as shipped; none changes shape. `CIPHER` **stays**,
+      reserved. Room for FastFHIR-style extension routing is provided by the
+      `primitives` mechanism — a future primitive is declared and inherited
+      rather than bolted onto each block.
+- [x] **Concurrency & write model — settled (4.0-F): out of scope for this
+      repository.** Concurrent encoding is the Iris Codec's concern; the spec
+      says nothing about it and it implies nothing on disk. The `IFE_Memory`
+      VMA substrate was deleted — encoding is the Iris Codec's concern (4.0-F).
+- [x] **Coexistence policy — settled (4.0-G): none required.** The format
+      does not change, so there is no transition. Existing files remain
+      readable by definition; parity is enforced by the `static_assert` wall
+      in 4.0-H.
+
+**Exit:** every decision above logged with a short rationale; no open
+"TBD" affecting Phase 2.
+
+## Phase 2 — JSON specification
+
+**Status (2026-08-18): delivered except one item, named below.** The
+documents are authored and the validator runs before every generation. The
+append-only diff check — validator item 1 — is now built (XP-1, 2026-08-18):
+`--validate` recomputes the wire witness and compares it against the
+committed baseline `tests/wire/witness.json`; a shipped field moved, widened,
+retyped or removed errors, additions pass, and `--check` fails until the
+baseline is deliberately refreshed. Not built: the **normative
+shall/should/may clauses** in the JSON, which 4.6 needs and which no field
+currently carries.
+
+- [x] **Spec validator** — `python -m generator --validate`, stdlib-only,
+      run in CI beside `--check`. **Built** — `generator/validate.py`
+      implements all five checks below (the append-only invariant as the
+      witness gate, check 7), and `.github/workflows/ci.yml` runs it.
+      Checks, in rough order of importance:
+      1. **The append-only invariant**: no field removed, retyped, resized or
+         reordered against the committed wire witness (`tests/wire/witness.json`,
+         XP-1); retirement only via `deprecated`. Additions pass; the
+         evidence is refreshed deliberately (`tools/refresh_witness.py`), and
+         `--check` enforces it. Without this the invariant is a convention
+         that one careless edit silently breaks, and every compatibility
+         guarantee in this document rests on it.
+      2. Unique recovery tags; unique enum values within a group; unique
+         field names within a block.
+      3. `points_to` targets name existing blocks; `enum` references name
+         existing groups; every block's `recovery_tag` exists.
+      4. Version monotonicity (`since` ≤ the document version), and identical
+         `spec` identity blocks across the two documents.
+      5. Structural well-formedness — required keys, name patterns, value
+         forms.
+      **Not a JSON Schema, deliberately.** `spec/ife.meta.schema.json` was
+      written and deleted: checks 1–4 are inexpressible in JSON Schema (1 is
+      a property of the *diff* between revisions, 2 is uniqueness over object
+      values, 3 is cross-document), it would need `jsonschema` in a
+      deliberately stdlib-only toolchain, and check 5 duplicates the
+      `SpecError` paths `generator/model/layout.py` already raises — a second
+      source of truth for the same question. Do not re-propose it. The
+      `$schema` keys that referenced it have been removed from both instance
+      documents.
+- [x] **`spec/ife_fields.json` + `spec/ife_constants.json`** authored per Phase 1 decisions, covering:
+      constants/sentinels, enumerations, header blocks, array blocks and
+      entry layouts, versioning semantics, validation rules. Plus
+      `ife_header.json`, which Phase 1 did not anticipate: specification
+      identity stated once so two documents cannot disagree about it.
+- [x] **Doc-generation fields baked in from the start:** per-item `description`,
+      normative clauses tagged shall/should/may, section anchors, cross
+      references, units/ranges, equation hooks — everything Phase 5 needs so
+      the schema never needs a redesign for documentation. **Done — clause
+      tagging landed via 4.6's capped predicate vocabulary** (range, enum
+      membership, ordering, non-null), each check emitting a sentence citing
+      its spec section; `description`, `errata` and `unspecified` are carried,
+      and section anchors are enforced by `generator/validate.py`. Equation
+      hooks stay prose-side (the deferred 2.1/2.2 markers), non-blocking.
+- [x] **Derivation rule:** byte offsets and block sizes are *never* stated in
+      the JSON; they are derived from field order and type by consumers
+      (generator and doc pipeline), eliminating transcription drift.
+
+**Exit:** schema validates; a design review reads the JSON side-by-side with
+`DESIGN.md` and finds no divergence.
+
+## Phase 3 — Code generator
+
+**Status (2026-08-07): the generator is built and feeding Phase 4.** Five
+artifacts emit from `spec/` alone and regeneration is byte-stable. Outstanding:
+**binding surfaces** (nothing emitted for Python or WASM) and the `--check`
+parity redesign — now XP-2 (P1, pending).
+
+- [x] **`generator/`** — Python stdlib-only package run as `python -m generator`, deterministic output (stable
+      ordering, no timestamps). Gated by `--validate` and `--check` rather than
+      by unit tests of its own; the C++ test binaries are what execute its output.
+- [x] **Emitted C++** (regenerable, gitignored under `generated_source/`): enumerations;
+      layout/vtable constants; POD data types; field keys; validation and
+      recovery tables; version-aware block sizes (per-`since` gating data so
+      runtime version checks are table-driven, not hand-threaded).
+      `IFE_Constants.hpp`, `IFE_VTables.hpp`, `IFE_Blocks.hpp` + `.cpp`.
+- [ ] **Emitted binding surfaces** (stubs acceptable initially): field-key
+      tables for Python and WASM/Emscripten. **Not started** — R-4 / R-5 (Phase 6).
+- [x] **Build integration:** configure-time generation when `generated_source/`
+      is absent or `-DIFE_RUN_GENERATOR=ON`; CI check that
+      regeneration is diff-clean; generator is stdlib-only Python.
+      `CMakeLists.txt:110-137` and `.github/workflows/ci.yml`.
+- [x] **`--check` parity, not byte-equality — done via XP-2 (2026-08-18).**
+      The gate is a generated-parity check: each output's banner embeds the
+      witness hash, and `--check` verifies the on-disk files carry the
+      current one — asking "is `generated_source/` in parity with `spec/`?"
+      rather than whether the diff is empty.
+
+**Exit:** regeneration byte-stable; generated headers compile standalone;
+CI drift gate green.
+
+## Phase 4 — Generated runtime
+
+- [x] **Serialization/deserialization core** built on the generated layer:
+      block writers/readers, offset-chain traversal, version-gated reads
+      driven by generated tables (no hand-written `// VERSION CONTROL`
+      sentinels anywhere). **Done (2026-08-12):** readers, writers
+      (`store()`/`size_of()` for all 18 blocks), offset-chain traversal and
+      version-gated reads, all generated; `test_no_arg_validate_deep_on_every_block`
+      executes every no-arg entry point, and the writer round-trip covers
+      every store.
+- [x] **Validation:** offset validation, recovery-tag checks, deep
+      `validate_file_structure` equivalent, with error messages sourced from
+      the JSON's normative clauses. **Done (2026-08-12 + 4.6):** generated
+      validators + the runtime's `validate_file_structure` exist and pass
+      (`ife_validation_tests`); structural messages are formatted by
+      `IFE_Runtime::to_result`, and clause-sourced messages live in the
+      attachable conformance layer (4.6). JSON-clause *structural*
+      diagnostics remain a non-blocking carry-forward.
+- [x] **Recovery — done (2026-08-12): IFE_Runtime's `generate_file_map` /
+      `recover_file_structure`, covered by `ife_runtime_tests`:** file-map
+      generation and corruption-recovery scan
+      matching against the generated recovery-tag value set.
+- [x] **Memory substrate decision — executed: delete (4.0-F).**
+      `IFE_Memory.hpp/.cpp`, `tests/ife_memory_tests.cpp`, and the
+      `IFE_USE_FASTFHIR_SUBSTRATE` option are removed; the substrate belongs
+      to Iris-Codec ('how'), not the spec ('what'). No dormant half-features
+      remain.
+- [x] **Public API:** define the generated surface (successor to
+      `validate_file_structure` / `abstract_file_structure` /
+      `Serialization::` / `Abstraction::`), designed with Iris-Codec's
+      consumption in mind; legacy v1 API retired on a coordinated schedule
+      (Phase 6). **Done:** the exported surface is `include/IrisFileExtension.hpp`
+      (entry points + `Abstraction::` structs, 4.4); v1 retired (6.1–6.7).
+- [x] **Tests:** unit tests per block; multi-threaded write stress (TSan);
+      corrupted-input fuzzing of the validators; round-trip
+      encode→validate→decode property tests. **Done except the carried
+      items:** per-block unit tests (`ife_blocks_tests`, header-only and
+      compiled), writer round-trips, and the v1-oracle/1.1-witness property
+      tests all pass; TSan and fuzzing remain in the non-blocking
+      carry-forward ("Not blocking the release").
+
+**Exit:** a file can be encoded, validated, mapped, recovered, and decoded
+entirely through generated-layer code; test suite green including TSan.
+
+### Phase 4 implementation plan (refined from the `IrisCodecExtension.hpp`/`.cpp` review)
+
+The hand-written v1 surface (`src/IrisCodecExtension.hpp`, 1294 lines;
+`.cpp`, 3392 lines) decomposes into three strata. The plan generates what is
+mechanical and hand-writes — once — what is semantic:
+
+| Stratum | v1 form | Fate |
+|---------|---------|------|
+| **A — Layout constants** | `vtable_sizes` / `vtable_offsets` enums inside every `Serialization::` struct | **Done.** Generated as `IFE_VTables.hpp` + `IFE_Constants.hpp`. |
+| **B — Mechanical block I/O** | Per block: `size()`, `validate_offset()`, `validate_full()`, typed field reads; 9 `SIZE_*` / 13 `STORE_*` free functions driven by hand-written `*CreateInfo` structs; the `DATA_BLOCK` base | **Generate.** Every element is derivable from `ife_fields.json` (`type`, `enum`, `constant`, `points_to`, `nullable`, version groups). |
+| **C — Semantic runtime** | `abstract_file_structure`, `generate_file_map`, recovery scan, the `Abstraction::` structs, entry points, Emscripten remote fetch | **Hand-write once** against stratum B. Not generatable: it encodes intent (what to lift into RAM, map ordering, recovery policy), not layout. |
+
+```mermaid
+flowchart LR
+    J[spec/*.json] -->|generator| A[IFE_VTables.hpp<br/>IFE_Constants.hpp<br/><i>done</i>]
+    P[src/IFE_Bytes.hpp<br/>hand-written, 4.1] --> B
+    J -->|generator, 4.2| B[IFE_Blocks.hpp<br/>handles · readers · validators · writers]
+    A --> B
+    B --> C[src/IFE_Runtime.cpp<br/>hand-written semantic layer, 4.4]
+    C --> API[public API<br/>validate / abstract / map / recover]
+```
+
+#### Execution protocol — binding for every 4.x task
+
+The tasks below are written to be executed by directed (flash-class) models.
+Follow every rule; where a rule and a task conflict, the rule wins.
+
+1. **One task per session, and every session starts cold.** Execute exactly
+   one numbered task (e.g. `4.2b`). Assume no memory of any earlier task —
+   nothing carries over but what is on disk. Before touching anything, read,
+   in this order: (a) "Ground truth", (b) "Version gating — the v1 mechanism,
+   reverse-engineered", (c) the task itself, (d) everything in the task's
+   *Read first* and *v1 precedent* lists. Do not batch, do not "also fix"
+   something noticed in passing — note it in one line at the end and stop.
+2. **Never invent an identifier.** Every symbol written must either appear
+   verbatim in the task, or be copied from a file the task's *Read first*
+   list names. To enumerate a C++ file's real symbols:
+   `grep -n "^struct\|^class\|^namespace\|^inline\|^Result\|^void\|^Size" <file>`.
+   For Python: `grep -n "^def \|^class " <file>`. If a needed name cannot be
+   found, **STOP** and report what was searched.
+3. **Never hand-edit `generated_source/` or `generated_docs/`.** Those files
+   carry a DO-NOT-EDIT banner and are overwritten. Change the emitter in
+   `generator/emit/cpp.py` and regenerate.
+4. **Verify with the exact commands in *Done when*, and paste their output.**
+   Baseline commands, from the repo root:
+   `python3 -m generator` then `python3 -m generator --check` (must print
+   `generator: outputs are current (no drift)` and exit 0).
+5. **Minimal diffs.** Change only what the task names. No reformatting, no
+   import re-sorting, no tidying of adjacent code.
+6. **Do not touch the v1 files** (`src/IrisCodecExtension.hpp/.cpp`) in any
+   4.x task. v1 stays compiling and shipping until Phase 6 retires it; the
+   new layer is built alongside it.
+7. **⚠ tasks stop for a human.** A task marked ⚠ contains a decision a flash
+   model must not make. Produce the analysis it asks for and STOP.
+
+#### Ground truth (verified against the tree, 2026-08-06)
+
+Do not re-derive these; do not contradict them without re-verifying.
+
+| Fact | Value |
+|---|---|
+| Blocks in `ife_fields.json` | **16** — 5 `kind: header` (`FILE_HEADER`, `TILE_TABLE`, `CIPHER`, `METADATA`, `ATTRIBUTES`), 11 `kind: array` |
+| Array blocks | 6 with typed entries (`LAYER_EXTENTS`, `TILE_OFFSETS`, `ATTRIBUTE_SIZES`, `IMAGES`, `ANNOTATIONS`, `ANNOTATION_GROUP_SIZES`); 5 blobs (`ATTRIBUTE_BYTES`, `IMAGE_BYTES`, `ICC_PROFILE`, `ANNOTATION_BYTES`, `ANNOTATION_GROUP_BYTES`) |
+| Arrays carrying block-specific header fields | 2 — `IMAGE_BYTES` (`TITLE_SIZE`, `IMAGE_SIZE`), `ANNOTATIONS` (`GROUP_SIZES_OFFSET`, `GROUP_BYTES_OFFSET`) |
+| Fixed sizes *(as currently generated — 4 of these are wrong, see the parity audit)* | preamble **8 B** (to be deleted); universal block header **10 B** (`VALIDATION` u64 @0, `RECOVERY` u16 @8) — correct; typed-array header **16 B** (`STRIDE` u16 @10, `COUNT` u32 @12) — correct; blob-array header must be **14 B** (`COUNT` @10, no `STRIDE`) |
+| `FILE_HEADER` | shipped: **38 B at byte 0**, opening with `MAGIC`, no `VALIDATION`, version fields inside. Currently generated as 38 B at byte 46 — wrong; fixed by 4.0-H |
+| `CIPHER` | zero block-specific fields ⇒ `header_size` 10 (universal header only) |
+| Entries always begin at | `block_offset + <block>::header_size` — **not** `array_header::total_size` |
+| `points_to` also appears on **entry** fields | `IMAGES.IMAGE_ENTRY.BYTES_OFFSET` → `IMAGE_BYTES`; `ANNOTATIONS.ANNOTATION_ENTRY.BYTES_OFFSET` → `ANNOTATION_BYTES` |
+| Packed widths in use | `u24` (`ANNOTATION_ENTRY.IDENTIFIER`, `.PARENT_ID`, `TILE_OFFSET.SIZE`), `u40` (`TILE_OFFSET.OFFSET`) |
+| Sentinels (`IFE_Constants.hpp`) | `MAGIC_BYTES` 0x49726973, `NULL_OFFSET` 0xFFFFFFFFFFFFFFFF, `NULL_TILE` 0xFFFFFFFFFF, `NULL_ID` 0xFFFFFF |
+| Recovery tags | flat `0x5500`–`0x5510`, carried over from v1; unique, sharing the `0x55` high byte. Deliberately **not** partitioned and **no** array bit — settled in 4.0-A |
+| CMake already compiles generated code | `CMakeLists.txt:128-137` GLOBs `generated_source/*.cpp` and `*.hpp` with `CONFIGURE_DEPENDS` and appends them to the library — **adding a generated file needs no CMake edit** |
+| Generator regen trigger | `IFE_RUN_GENERATOR=ON`, or `generated_source/IFE_VTables.hpp` missing (`CMakeLists.txt:110-124`) |
+| Tests today | `tests/ife_bytes_tests.cpp` + `tests/ife_wire_parity_tests.cpp`; framework-free `IFE_CHECK` macro + `g_failures` + non-zero exit; gated by `IFE_BUILD_TESTS` alone (no substrate requirement) |
+
+#### Version gating — the v1 mechanism, reverse-engineered
+
+**Version gating is a core feature of the format, not an implementation
+detail.** v1 already implements it correctly and completely by hand; Phase 4
+does not redesign it, it *generates* it. Read this section before 4.2a, 4.2b
+or 4.4 — it is the contract being reproduced.
+
+The eight moving parts, each verified in the v1 source:
+
+| # | Mechanism | v1 implementation | Fate in Phase 4 |
+|---|---|---|---|
+| 1 | **Version is one packed `uint32_t`** | `major << 16 \| minor`; `IRIS_EXTENSION_1_0 = 0x00010000` (`.cpp:107`), current build is `IFE_VERSION = IRIS_EXTENSION_MAJOR<<16\|IRIS_EXTENSION_MINOR` (`.cpp:272`) | **Keep verbatim.** One integer compare per gate. |
+| 2 | **Read once, at the root** | `read_header` composes `header.extVersion` from the `EXTENSION_MAJOR`/`EXTENSION_MINOR` u16 fields of `FILE_HEADER` (`.cpp:912-913`) | **Keep, new source.** The v2 schema moved the version out of `FILE_HEADER` into the **preamble** (`SPEC_MAJOR` @4, `SPEC_MINOR` @6). Same composition, different two bytes. |
+| 3 | **Propagated by construction, never re-read** | every `DATA_BLOCK` carries `uint32_t __version` (`.hpp:401`); children are built with the parent's value — `TILE_TABLE(offset, __size, header.extVersion)` (`.cpp:929-930`) | **Keep verbatim.** Generated handles carry `__version` and pass it to every `points_to` target. |
+| 4 | **Root bootstrap** | `FILE_HEADER` is constructed with `UINT32_MAX` (`.cpp:806`) — its own version is unknowable until it is read, so the max value opens every gate for exactly one block | **Keep.** The preamble read (mechanism 2) is the only thing done before a real version exists. |
+| 5 | **The gate itself** | `if (__version > IRIS_EXTENSION_1_0); else <early-exit>;` — empty then-branch, **58 sites** in the `.cpp`. Early exit is `return <value>` in scalar readers, `goto <LABEL>` in array functions (jumping past the version-N region into the shared loop), `continue` inside per-entry loops | **Replaced.** Hand-threaded control flow is what generation exists to remove: a gated accessor returns `std::optional<T>`, empty when `__version` is below the field's `since`. Same semantics, no `goto`, no empty `if`. |
+| 6 | **Cumulative size constants** | each `vtable_offsets` enum ends `HEADER_V1_0_SIZE = <last field> + <its size>`, then `HEADER_SIZE = HEADER_V1_0_SIZE` — **30** such constants. `HEADER_V1_0_SIZE` is what a reader uses as the entries-start offset (`start = __offset + HEADER_V1_0_SIZE`, `.cpp:1653`); `HEADER_SIZE` means "size at the newest version this build knows" | **Generate.** `header_size_v1_0` per version group + `header_size` = newest. Derived from field order, never hand-maintained. |
+| 7 | **Arrays gate twice** | the block-level version gate, **plus** the stored `ENTRY_SIZE` — loops step by the file's stride (`__array += STEP`, `.cpp:1670`), so a v2 entry with extra trailing fields is stepped over correctly by a v1 reader | **Keep, generate.** Data-driven, not code-driven; the emitter must iterate by `stride()`, never by the generated `entry_size`. |
+| 8 | **Newer file ⇒ warn, do not reject** | `validate_header` flags `IRIS_WARNING_VALIDATION` and tells the user to upgrade (`.cpp:853-865`); it returns `IRIS_SUCCESS` | **Keep verbatim, and never harden it.** Append-only guarantees a newer file is always readable to the known prefix — major included. Rejection is never structurally justified; do not add a reject path. |
+
+**The marker convention is part of the contract.** v1 terminates every
+append-only ordered list in the header with a cumulative size constant, the
+`// Version N.M ends here.` line, a dashed rule, a blank line, then the
+newest-version alias. **The canonical form is
+`src/IrisCodecExtension.hpp:445-449`** — go read those five lines; do not
+work from a paraphrase. There are **23** occurrences, and not only in field
+enums: the `Serialization::`
+forward-declaration lists carry it too (`.hpp:96`, `.hpp:110`), because those
+lists are append-only as well. The matching executable region in the `.cpp`
+carries the banner `// VERSION CONTROL: VERSION 2 PARAMETERS ARE ADDED HERE`
+— **57** occurrences. Together they answer, at a glance and at every single
+site, "where does this version end and where does the next one get appended."
+
+**The generator must emit both.** Losing them would make generated code less
+readable than the hand-written code it replaces — the wrong direction. See
+4.2b rule 7 for the exact emission.
+
+#### 4.0 — ⚠ Decisions to close before any code below
+
+Each is a one-paragraph entry in `spec/DESIGN.md` with its rationale. A
+**default** is given so 4.1+ is never blocked; the default ships if no other
+decision is recorded.
+
+**v1 precedent — visit before deciding:** `src/IrisCodecExtension.hpp:39`
+(the `IrisCodecExtensionValidateEncoding` macro, decision B); `:55-71` (the
+`IFE_EXPORT_API` / `IFE_EXPORT` visibility scheme, decision D); `:85`
+(`MAGIC_BYTES`) with `src/IrisCodecExtension.cpp:275-282`
+(`is_Iris_Codec_file` — how v1 recognizes its own files, decision G);
+`src/IrisCodecExtension.hpp:326-337` (`Serialization::Offsets` — the v1
+sentinel set, decision A).
+
+- [x] **A. Recovery-tag space — DECIDED: keep the flat list; the promise of a
+      partitioned space and an array bit is struck.** `ife_constants.json`
+      keeps v1's `0x5500`–`0x5510` unchanged. Rationale: (1) the shared
+      `0x55` high byte *is* the partition that earns its keep — it is what
+      makes a coincidental `u16` unlikely to be mistaken for a tag during a
+      recovery scan, and it already exists; (2) with 16 blocks, classifying a
+      tag as header-vs-array is a generated lookup, so a reserved bit buys a
+      bit-test over a switch and nothing else; (3) FastFHIR's `0x8000` array
+      bit exists because its tag space is open-ended and third-party
+      extensible — IFE has one specifying authority and a closed block list;
+      (4) changing tag values would invalidate the published spec tables for
+      no functional gain. The recovery scan (4.4) matches against the
+      generated value set.
+- [x] **B. Encode-time validation — DECIDED: a Vulkan-style validation
+      layer, not a compile-time macro.** `IrisCodecExtensionValidateEncoding`
+      (`src/IrisCodecExtension.hpp:39`) is retired: it is `#define ... 1`
+      unconditionally, so the knob it advertises does not exist. It is
+      replaced by an optional layer, attachable at runtime, that costs a null
+      check when absent. Two tiers, and the split matters:
+      - **Structural validation stays inline and mandatory** — `VALIDATION`
+        equals the block's own offset, `RECOVERY` equals the tag, bounds fit
+        the file. This is 4.2c's generated `validate()`: a few integer
+        compares, no allocation. v1 already states the principle at
+        `src/IrisCodecExtension.hpp:41` — *"Decoding extension validation
+        cannot be disabled"* — and that stays true.
+      - **The layer is a development tool, not a production dependency.**
+        Exactly as with Vulkan: developers attach it to prove an encoder
+        emits conformant files, and ship production binaries without it. It
+        is therefore free to be verbose, thorough and slow — it never runs in
+        the hot path of a shipped product, so no check needs to justify
+        itself on cost. It is built as its own dynamically-linked target and
+        is never a link-time dependency of the library.
+      - **Spec-conformance validation moves into the layer** — the "shall"
+        clauses: `X_TILES`/`Y_TILES` ≥ 1, layer scale strictly increasing,
+        enum values within the permitted set. v1 implements these inline at
+        `src/IrisCodecExtension.cpp:1671-1677` and in
+        `VALIDATE_ENCODING_TYPE` / `VALIDATE_PIXEL_FORMAT` (`:670-700`),
+        building `std::string` diagnostics that cite the spec section.
+        That is layer work, not hot-path work.
+      - **Mechanism — what we take from Vulkan and what we deliberately
+        don't.** In Vulkan, layers are separate shared libraries discovered
+        through JSON manifests, enabled *at `vkCreateInstance`* (or by env
+        var / config file), and spliced into a **dispatch chain built once at
+        creation time**: app → loader trampoline → layer₁ → … → loader
+        terminator → driver. Nothing is tested per call; the dispatch table
+        entry simply points at the driver when no layer is present. Layers
+        report through a registered debug-messenger callback, not by
+        printing. Modern validation is one consolidated layer
+        (`VK_LAYER_KHRONOS_validation`), not many.
+        **Take:** (1) the validating code lives in a **separate library**
+        that need not be linked at all; (2) attachment is decided **once, at
+        writer/encoder creation** — never per call, never per block;
+        (3) diagnostics go to a **caller-registered callback** so the layer
+        never owns I/O policy; (4) hooks are **chainable** (a `next` pointer)
+        so a future tracing or capture layer composes rather than competes;
+        (5) one consolidated layer.
+        **Don't take:** the loader, trampolines, terminators and manifest
+        discovery. That machinery exists because Vulkan must multiplex many
+        independent third-party drivers behind a stable C ABI with
+        system-wide layer discovery. IFE has one implementation and one
+        primary consumer; a manifest loader here would be cargo cult.
+        **Concretely:** the writer context carries a `const ValidationHooks*`,
+        resolved once at creation and null when no layer is attached — not a
+        mutable global, which would be neither thread-safe nor consistent
+        with the state-minimization rule. The *call site must be emitted from
+        day one*: adding a dispatch point later is a breaking change, which is
+        why 4.2d emits it even though 4.6 implements the layer.
+      - **The layer is generated too.** Its checks come from the JSON's
+        normative clauses, so the diagnostics and the spec document (Phase 5)
+        cite the same source. This makes Phase 2's "normative clauses tagged
+        shall/should/may" load-bearing rather than documentation-only.
+- [x] **C. Type dependency — DECIDED: Iris-Headers throughout.** Generated
+      code uses `Iris::Offset`, `Size`, `BYTE` and `Result` directly, as the
+      hand-written layer does. No IFE-local alias set, and no conversion layer
+      at the runtime boundary. Consequences the 4.x tasks must honour:
+      - `IFE_Blocks.hpp` **`#include`s the Iris headers itself** rather than
+        relying on include order. Note the hand-written header does *not* —
+        `src/IrisCodecExtension.hpp:77` says `using namespace Iris;` but the
+        `.cpp` is what includes `IrisTypes.hpp` first (`:42-45`). Generated
+        headers must be self-contained; do not reproduce that fragility.
+      - `IFE_Constants.hpp` and `IFE_VTables.hpp` stay dependency-free (they
+        are pure integers); **only `IFE_Blocks.hpp` gains the dependency.**
+        The "generated headers compile standalone" property therefore holds
+        for two of the three — adjust the 4.2b compile check accordingly.
+      - `4.1`'s `IFE_Bytes.hpp` uses the Iris scalar types too; it does not
+        declare its own `Byte`/`Offset`/`Size`.
+- [x] **D. `IFE_EXPORT` — DECIDED (2026-08-09): split it. The semantic API is
+      exported; the generated block layer is not, and `IFE_HEADER_ONLY` is the
+      only way to surface it.** The original decision assumed generated code
+      was header-only and had no symbol to export; 4.2b's `.hpp`/`.cpp` split
+      ended that, and a shared build exported **zero** `IFE::` symbols while
+      exporting **139** hand-written `Serialization::` ones — a consumer could
+      call every v1 block method and no generated one.
+
+      **Exported:** the four entry points, `recover_file_structure`, and the
+      `IFE::Abstraction` structs, marked `IFE_EXPORT` exactly as v1 marks
+      them. This is what a consumer actually calls —
+      `examples/slide_info_abstraction.cpp` builds against the generated stack
+      touching only these, never naming a block handle — so the cutover stays a
+      re-point rather than a build-system change.
+
+      **Not exported:** `IFE::blocks`, `IFE::vtables`, `IFE::constants`. Three
+      reasons, in order of weight: an exported accessor could only offer a
+      cross-boundary call where inlining a `u24` load is strictly better; every
+      exported symbol is a thing that cannot change without breaking someone,
+      and a *generated* layer must stay free to change when the schema does;
+      and it holds the ABI at a handful of symbols instead of ~139. A consumer
+      that wants the block layer defines `IFE_HEADER_ONLY` or compiles
+      `generated_source/IFE_Blocks.cpp` into its own target — the supported
+      route, not a workaround.
+
+      **Enforced, not remembered.** The `IFE_EXPORT` scheme moved out of
+      `IrisCodecExtension.hpp` into `src/IFE_Export.hpp` so both layers share
+      one definition, and `tests/exported_symbols.cmake` fails the build if any
+      `IFE::` symbol becomes visible. Red-green: flipping
+      `CXX_VISIBILITY_PRESET` to `default` leaks 242 symbols and the test names
+      them.
+
+- [x] **E. `f16` — DECIDED, and half-applied.** The earlier "fail loudly"
+      decision was made on a false premise: `image_orientations` declared
+      `"underlying_type": "f16"` and `IMAGES.IMAGE_ENTRY.ORIENTATION`
+      resolved through it, so raising `SpecError` on `f16` would have failed
+      on the current spec. `f16` is genuinely part of IFE 1.0.
+      1. **`image_orientations` is no longer an enumeration — DONE.** Its own
+         description said *"Any degree value is legal; these constants are
+         provided for convenience"*, which describes named constants over a
+         continuous scalar, not an enumeration — and C++ has no
+         `enum class : float` to emit it as. Applied: the seven orientations
+         moved into `statically_defined_values` as `f16` constants;
+         `ORIENTATION` retyped from `enum` to `"type": "f16"`. **The wire is
+         unchanged** — verified by regenerating and diffing `IFE_VTables.hpp`
+         with comments stripped: every offset and size identical,
+         `ORIENTATION` still 2 B at entry offset 18, `IMAGE_ENTRY` still
+         20 B. The dangling `{{constants:image_orientations}}` anchor in
+         `spec/ife_spec.md` was repointed at section 2.2.
+      2. **`f16` accessors — DONE, landed with 4.1.** `load_f16`/`store_f16`
+         in `IFE_Bytes.hpp` return `float`, converting from the wire's
+         binary16 bit pattern. Width is 2 B either way — an accessor-typing
+         fix, not a format change.
+      3. **Consequence — DONE (landed with the emitter):** the seven
+         constants now emit as `inline constexpr std::uint16_t
+         ORIENTATION_90 = 0x55A0;` — bit patterns. Once the accessor returns
+         `float`, comparing it against a `uint16_t` bit pattern silently
+         never matches. When `f16` support lands, `emit_constants_header`
+         must **decode `f16` sentinels at generation time** and emit
+         `inline constexpr float ORIENTATION_90 = 90.0f;`. The JSON keeps
+         the authored hex — it is the on-wire value, consistent with every
+         other sentinel — and the generator does the conversion.
+      *Still true from the original decision:* a type the generator genuinely
+      cannot emit must raise `SpecError` naming the offending field, never a
+      silently-wrong accessor.
+- [x] **F. `IFE_Memory` — DECIDED: delete, deferred to Phase 4 exit.** Not
+      adopted. **Rationale (this is the load-bearing part — record it in
+      `DESIGN.md`):** the substrate is a fine piece of FastFHIR-style
+      engineering and it does give correct CAS-based atomicity for file-size
+      updates — but concurrent *encoding* is an implementation concern of the
+      **Iris Codec**, not of the file-extension spec. This repository defines
+      structure and validation; putting a write-scheduling arena here moves
+      the modularity boundary, which the guiding principles forbid.
+      - **Now:** 4.2d's generated `store()` takes a plain `BYTE* const __base`
+        — no arena, no write-head coupling. Encoding stays one-thread-per-file,
+        as the hand-written layer does today.
+      - **Executed — deleted from this repository.** `src/IFE_Memory.hpp/.cpp`,
+        `tests/ife_memory_tests.cpp`, and the `IFE_USE_FASTFHIR_SUBSTRATE`
+        option are gone; the code survives in git history for Iris-Codec to
+        take as its own. This satisfies the Phase 4 exit rule that no dormant
+        half-feature survives.
+- [x] **G. Coexistence — DECIDED: there is nothing to coexist with. This is a
+      refactor, not a new format version.** The on-disk format stays exactly
+      as shipped for IFE 1.0; the generated layer must read and write files
+      that today's hand-written encoder produced, byte for byte. This follows
+      from the append-only invariant, not merely from the existence of slides
+      in the wild: **all six divergences below move existing fields**, which
+      the invariant forbids at any version. The format is therefore not
+      "frozen" by fiat — it is simply only ever allowed to grow.
+      - No conversion tool, no dual-read, no v1-detection/rejection path —
+        all of that was premised on a format change that is not happening.
+      - "v1 / v2" is retired as terminology: there is one format (**IFE 1.0**)
+        and two *implementations* of it — the **hand-written layer**
+        (`src/IrisCodecExtension.*`, shipping) and the **generated layer**
+        (Phase 4). Where this document says "v1 precedent" it means the
+        hand-written implementation.
+      - **The spec JSON does not currently describe the shipped format** — six
+        blocks diverge. See the parity audit below; correcting it is task
+        4.0-H and it blocks all other 4.x work.
+      - Consequence worth stating plainly: any "deliberate correction of a
+        published-table defect" (guiding principles) is now a **wire change**
+        and must be treated as a version bump, not a free fix.
+
+#### Wire-format parity audit (all 16 blocks, verified 2026-08-06)
+
+**The format is frozen at shipped IFE 1.0** (decision 4.0-G): real slide files
+exist in the wild, so the generated layer must read and write the bytes the
+hand-written layer already produces. This audit compares every generated
+`vtables::` namespace against the corresponding `vtable_offsets` enum in
+`src/IrisCodecExtension.hpp`.
+
+**Identical — 9 blocks.** `TILE_TABLE` (44 B), `METADATA` (56 B),
+`ATTRIBUTES` (29 B), and the six typed-entry arrays `LAYER_EXTENTS` (16/12),
+`TILE_OFFSETS` (16/8), `ATTRIBUTE_SIZES` (16/6), `IMAGES`, `ANNOTATIONS`
+(32), `ANNOTATION_GROUP_SIZES` — every field at the same offset and width.
+Several fields were **renamed** (`ENTRY_SIZE`→`STRIDE`, `ENTRY_NUMBER`→`COUNT`,
+`LENGTHS_OFFSET`→`SIZES_OFFSET`, `BYTE_ARRAY_OFFSET`→`BYTES_OFFSET`,
+`ATTRIBUTES_SIZES`→`ATTRIBUTE_SIZES`, `IMAGE_ARRAY`→`IMAGES`); names do not
+affect bytes and the new names are kept.
+
+**Divergent — 6 blocks. ✅ All corrected by 4.0-H; the table below records
+what was wrong and is kept as the audit trail.**
+
+| Block | Shipped 1.0 | Currently generated | Divergence |
+|---|---|---|---|
+| `FILE_HEADER` | `MAGIC`(4)@0 `RECOVERY`(2)@4 `FILE_SIZE`(8)@6 `EXT_MAJOR`(2)@14 `EXT_MINOR`(2)@16 `FILE_REVISION`(4)@18 `TILE_TABLE_OFFSET`(8)@22 `METADATA_OFFSET`(8)@30 = **38 B at byte 0** | 8-B preamble + universal header: `VALIDATION`(8) `RECOVERY`(2) `FILE_SIZE`(8) `FILE_REVISION`(4) `TILE_TABLE_OFFSET`(8) `METADATA_OFFSET`(8) = **38 B at byte 8** | Root does **not** carry the universal block header in 1.0 — it opens with magic, and the spec version lives *inside* it. No preamble exists. |
+| `ATTRIBUTE_BYTES` | `VALIDATION`(8)@0 `RECOVERY`(2)@8 `COUNT`(4)@10 = **14 B** | + `STRIDE`(2)@10, `COUNT` moved to @12 = **16 B** | Byte-blob arrays carry **no STRIDE** in 1.0 — stride is implicitly 1. |
+| `ICC_PROFILE` | same as above = **14 B** | **16 B** | same |
+| `ANNOTATION_BYTES` | same as above = **14 B** | **16 B** | same |
+| `ANNOTATION_GROUP_BYTES` | same as above = **14 B** | **16 B** | same |
+| `IMAGE_BYTES` | `VALIDATION`(8)@0 `RECOVERY`(2)@8 `TITLE_SIZE`(2)@10 `IMAGE_SIZE`(4)@12 = **16 B** | `STRIDE`+`COUNT` inserted, pushing `TITLE_SIZE`/`IMAGE_SIZE` to @16/@18 = **22 B** | Not an array at all in 1.0 — a header block with two sizes followed by raw bytes. |
+
+`CIPHER` has no shipped counterpart (reserved, never written; `TILE_TABLE`'s
+`CIPHER_OFFSET` is nullable), so it is unconstrained. **Decision: `CIPHER`
+stays in the schema** as a reserved `block` primitive with no fields beyond
+the universal header — it holds its recovery tag (`0x5503`) and its place in
+the block inventory against future Iris Codec use. Generated code emits the
+handle and its validator; nothing writes it, and `CIPHER_OFFSET` stays
+nullable.
+
+#### Primitive block types (declared up front, FastFHIR style)
+
+The schema declares a small, closed set of **primitives** first; every block
+then names the primitive it derives from. This makes the inheritance pattern
+explicit in the spec, in the generated C++, and in the spec document, instead
+of leaving it to be inferred from a `kind` string plus an `entry.blob` flag.
+
+The taxonomy is not invented here — it is what shipped IFE 1.0 already does,
+made legible:
+
+| Primitive | Derives from | Adds | Prefix size | Members |
+|---|---|---|---|---|
+| `file_header` | — (root; special by design) | `MAGIC` u32 @0, `RECOVERY` u16 @4 | **6 B** | `FILE_HEADER` only |
+| `block` | — | `VALIDATION` u64 @0, `RECOVERY` u16 @8 | **10 B** | `TILE_TABLE`, `CIPHER`, `METADATA`, `ATTRIBUTES`, `IMAGE_BYTES` |
+| `array` | `block` | `STRIDE` u16 @10, `COUNT` u32 @12 | **16 B** | `LAYER_EXTENTS`, `TILE_OFFSETS`, `ATTRIBUTE_SIZES`, `IMAGES`, `ANNOTATIONS`, `ANNOTATION_GROUP_SIZES` |
+| `byte_array` | `block` | `COUNT` u32 @10 (byte count) | **14 B** | `ATTRIBUTE_BYTES`, `ICC_PROFILE`, `ANNOTATION_BYTES`, `ANNOTATION_GROUP_BYTES` |
+
+Three things this makes obvious that the current schema obscures:
+
+- **`byte_array` carries no `STRIDE` because its stride is intrinsically 1.**
+  Storing it would encode no information. That is why shipped 1.0 omits it,
+  and why the current schema's uniform 16-byte array header is a defect
+  (4.0-H), not a design improvement.
+- **`STRIDE` exists only where it can vary.** On `array` it is the
+  forward-compatibility mechanism — readers step by the encoding-time entry
+  size (gating mechanism 7), so a wider future entry is skipped correctly. A
+  byte has no wider future.
+- **`IMAGE_BYTES` is a `block`, not an array.** Its trailing bytes are
+  addressed by its own `TITLE_SIZE`/`IMAGE_SIZE` fields, so it needs neither
+  `STRIDE` nor `COUNT`. Classifying it as an array is what pushed those two
+  fields from @10/@12 to @16/@18.
+
+**There is no string type, and there never will be.** Every string in IFE is
+a byte range whose length is supplied from outside it — never
+null-terminated, never length-prefixed in place. `ATTRIBUTE_BYTES` holds keys
+and values sliced by `ATTRIBUTE_SIZES`; `ANNOTATION_GROUP_BYTES` holds titles
+sliced by `ANNOTATION_GROUP_SIZES`; `IMAGE_BYTES` holds a label of
+`TITLE_SIZE` bytes. **A string is therefore a `byte_array` region**, and
+character encoding is normative prose, not layout: keys, labels and titles
+are ASCII, attribute values are UTF-8 (`spec/ife_spec.md:297-298`,
+`:324`, `:381`). The layout layer must never gain a `string` type — it would
+have to invent a length or a terminator, and IFE has neither.
+
+Two consequences worth stating, because both are irregularities the format's
+history bequeathed and neither can be tidied under append-only:
+
+- **A `byte_array` is opaque, and its slices are not uniform.**
+  `ATTRIBUTE_BYTES` interleaves ASCII keys with UTF-8 values;
+  `ANNOTATION_GROUP_BYTES` interleaves ASCII titles with packed 24-bit
+  identifiers. So a per-block "encoding" property would be wrong — the
+  encoding belongs to the *slice*, described by the sizes array that cuts it.
+  `ICC_PROFILE` and `ANNOTATION_BYTES` carry no text at all.
+- **Payload length has two mechanisms.** A `byte_array` takes it from
+  `COUNT`; `IMAGE_BYTES` takes it from `TITLE_SIZE + IMAGE_SIZE`. Shipped 1.0
+  does it both ways, so the taxonomy documents the difference rather than
+  forcing one — `IMAGE_BYTES` is a `block` that happens to carry a trailing
+  payload described by its own fields.
+
+**In the schema.** `spec/ife_fields.json` gains a top-level `primitives`
+object: each entry names its `extends` parent (absent for roots) and the
+versioned `fields` it contributes. Each block then carries
+`"primitive": "<name>"` in place of today's `kind` + `entry.blob`
+combination. Offsets stay derived — a block's fields begin at the cumulative
+size of its primitive chain, exactly as they do today from the hard-coded
+header lists.
+
+**In the generated C++.** `IFE_Blocks.hpp` emits one base struct per
+primitive, and every block struct derives from its primitive — so the
+hierarchy a reader sees in the header is the hierarchy the spec declares.
+This replaces v1's single hand-written `DATA_BLOCK` base
+(`src/IrisCodecExtension.hpp:385-408`) with a generated three-way hierarchy
+that the file format actually has. Shared behaviour (`operator bool`, the
+`VALIDATION`/`RECOVERY` checks, stride-driven iteration) is emitted once on
+the primitive rather than repeated on all 16 blocks.
+
+**Extensibility.** A future primitive (FastFHIR-style extension routing, a
+keyed map block) is added to `primitives` and inherited, not bolted onto
+every block that needs it.
+
+**Deprecation — the only way a field ever leaves service.** Append-only means
+a field can never be removed, so the schema needs an explicit way to retire
+one while its bytes stay reserved forever. Add a per-field `deprecated`
+property carrying the version in which it was retired (alongside the existing
+`since`). Its effects:
+
+- **Layout is unchanged.** The slot keeps its offset and width and continues
+  to contribute to every cumulative size constant. Deriving offsets must
+  ignore `deprecated` entirely — a deprecated field that shifted its
+  successors would break the invariant it exists to serve.
+- **Readers** still get an accessor, marked `[[deprecated]]` so a consumer is
+  warned at compile time rather than at runtime. It must keep working: files
+  written before the retirement still carry meaningful values.
+- **Writers** stop populating it. The generated `<Block>CreateInfo` omits
+  deprecated members, and `store()` writes the field's documented retirement
+  value (zero unless the spec names another), exactly as it already does for
+  `constant` fields.
+- **The spec document** (Phase 5) renders the row struck through with its
+  `since`–`deprecated` range, so the published layout table stays a complete
+  historical record of every byte ever defined.
+- **The spec validator** (Phase 2) must reject any edit that removes a
+  field, changes an existing field's type or width, or reorders a version
+  group — deprecation is the only sanctioned retirement path. This is the
+  check that makes the invariant enforceable rather than merely stated.
+
+Nothing in the schema is deprecated today; the mechanism is specified now so
+the first retirement is a schema edit rather than a design discussion.
+
+**Deliberate silence — saying "we are not specifying this", out loud.** A
+specification that is silent about something cannot distinguish *not decided
+yet* from *decided not to decide* from *somebody forgot*. All three read as a
+blank cell. The schema therefore carries an `unspecified` property, on a
+field or a block, drawn from a closed vocabulary of three — no expression
+syntax, so this stays inside the cap; it is documentation, not behaviour:
+
+| Value | Means | Example |
+|---|---|---|
+| `reserved` | The slot exists and is claimed. Encoders write nothing; readers ignore it; meaning is deferred to a future version. | `CIPHER` |
+| `external` | The bytes are meaningful, but another authority defines them — a different standard, or a value elsewhere in this file. Requires `specified_by` naming that authority. | `ICC_PROFILE` (the ICC specification), `ANNOTATION_BYTES` (whichever `annotation_types` value the entry declares) |
+| `implementation` | The encoder chooses freely and IFE declines to constrain it. | — none today |
+
+Every use requires prose saying **why** — silence without a reason is the
+thing this mechanism exists to abolish. Its effects:
+
+- **Layout is untouched.** An `unspecified` field keeps its type, width and
+  offset and contributes to every cumulative size, exactly as a `deprecated`
+  one does. This records intent, never bytes.
+- **Readers still get accessors** — the bytes are present and a caller may
+  legitimately want them. `reserved` fields get no `CreateInfo` member and
+  `store()` writes zero.
+- **The validation layer must not flag them.** This is the point: an
+  unspecified region has no conformance rules to violate, and a layer that
+  complains about one is broken. Without the marker the layer would have to
+  guess, and guessing would make deliberate silence indistinguishable from
+  non-conformance.
+- **The document renders it explicitly** — "Reserved" or "Not specified by
+  this document; see <authority>" rather than an empty cell, so a reader can
+  tell a deliberate gap from an oversight without asking anyone.
+
+Applied today to `CIPHER` (`reserved`), and to `ICC_PROFILE` and
+`ANNOTATION_BYTES` (`external`). `IMAGE_BYTES` is deliberately *not* marked:
+its payload is part specified (an ASCII label of `TITLE_SIZE` bytes) and part
+external (the compressed stream), so a block-level marker would overclaim —
+prose covers it instead.
+
+#### Generated code ships as a header and a source
+
+`IFE_Blocks.hpp` declares; `IFE_Blocks.cpp` defines. Both are emitted from the
+same list of member records, in the same order, under the same section
+banners, so the two files scroll in parallel — the structure
+`IrisCodecExtension.hpp`/`.cpp` has by hand, here by construction rather than
+by discipline. Neither can drift from the other without the emitter changing.
+
+**Why, having started header-only.** One file of 1,515 lines put each block's
+declaration inside its own bodies, so the header could not be read as an
+outline of the format — which is most of what a reader wants from it. Only 47
+of those lines were trivial accessors; the rest were `validate()`,
+`validate_deep()` and offset-accessor bodies that belong out of sight.
+
+**What had to change to allow it.** The primitive bases were CRTP templates,
+because `operator bool` needs the derived block's `header_size` and a template
+body cannot live in a `.cpp`. v1 has the same problem and solves it without
+templates: `DATA_BLOCK::validate_offset(__base, type, recovery)`
+(`src/IrisCodecExtension.hpp:405`) takes the per-type data as *arguments*
+rather than encoding it in the type. Applying the same trick — `fits(header_size)`,
+`entries_at(header_size)` — makes the bases plain structs, each block's
+`operator bool` a one-line forward, and every body movable. Generated code now
+contains no templates at all.
+
+**`IFE_HEADER_ONLY` keeps both options open.** Defining it before including
+`IFE_Blocks.hpp` folds the source in at the bottom; the `.cpp` includes the
+header back, which the include guard turns into a no-op, so the recursion
+terminates. Linkage is switched by `IFE_BLOCKS_INLINE` — `inline` in
+header-only mode, empty when compiled as its own translation unit, so the
+library still emits real symbols.
+
+Verified rather than asserted: compiled mode builds and links; header-only
+builds; and **two translation units both including it header-only link with no
+duplicate symbols**, which is the case the macro exists for and the one that
+would bite a consumer. CMake builds `tests/ife_blocks_tests.cpp` twice, once
+each way, so both consumption paths are covered by the build.
+
+**Consequence:** decision 4.0-D (no visibility macros on generated symbols)
+was taken on the header-only premise and is reopened above. A shared build
+currently exports zero `IFE::blocks` symbols.
+
+#### 4.0-H — Wire-format parity correction — ✅ DONE
+
+All six divergences corrected; the generated layout now equals shipped IFE
+1.0 in every field of every block. Verified two ways: an offset-by-offset
+comparison of all 16 blocks against the hand-written vtables, and
+`tests/ife_wire_parity_tests.cpp` — **103 `static_assert`s** that compile
+clean and, when `FILE_REVISION` was deliberately widened `u32`→`u64` as a
+red-green check, failed the build naming each field that moved.
+
+What changed: `primitives` replaces the standalone `file_preamble`,
+`block_header` and `array_header` structures; every block names one
+(`kind` and `entry.blob` are gone); `derive_layout` walks the primitive
+chain instead of assuming a universal header and an always-present `STRIDE`;
+`FILE_HEADER` regains `EXTENSION_MAJOR`/`EXTENSION_MINOR` and the preamble is
+deleted. `recovery_codes` moved to the object form with all 17 members
+described, and `underlying_type` now resolves aliases like a sentinel's
+`type` always did.
+
+**Found while building the gate — carry into Phase 6:**
+`src/IrisCodecExtension.hpp:85` defines `MAGIC_BYTES` as a **preprocessor
+macro**, which clobbers the generated `constexpr std::uint32_t MAGIC_BYTES`.
+The two layers cannot coexist in one translation unit without an `#undef`.
+Harmless for the parity test, but a real obstacle for any consumer migrating
+gradually — retire the macro with the rest of the hand-written layer.
+
+The original task description follows, for the record.
+
+- **v1 precedent:** the six structs named in the table above, in
+  `src/IrisCodecExtension.hpp` — `FILE_HEADER` `:421-462`,
+  `ATTRIBUTES_BYTES` `:827-861`, `IMAGE_BYTES`, `ICC_PROFILE`,
+  `ANNOTATION_BYTES`, `ANNOTATION_GROUP_BYTES`. Their `vtable_offsets` enums
+  are the normative layout.
+- **Steps:**
+  1. `spec/ife_fields.json`: add the top-level `primitives` object with the
+     four entries in the table above, replacing the standalone
+     `file_preamble`, `block_header` and `array_header` structures.
+     `file_preamble` is **deleted** — magic and version live inside
+     `FILE_HEADER` in shipped 1.0.
+  2. Give every block a `"primitive"` key per the table's Members column,
+     replacing `kind` and `entry.blob`. `FILE_HEADER` gains its shipped
+     field list (`FILE_SIZE`, `EXTENSION_MAJOR`, `EXTENSION_MINOR`,
+     `FILE_REVISION`, `TILE_TABLE_OFFSET`, `METADATA_OFFSET`) after the
+     `file_header` primitive's `MAGIC` + `RECOVERY`.
+  3. `IMAGE_BYTES` becomes `primitive: "block"` with `TITLE_SIZE` +
+     `IMAGE_SIZE`; the four byte-blob blocks become
+     `primitive: "byte_array"`.
+  4. `generator/model/layout.py`: `derive_layout` currently prepends
+     `block_header_fields` to **every** block unconditionally and always adds
+     `STRIDE`+`COUNT` to arrays. Replace both with a generic walk of the
+     block's primitive chain, so the prefix is data-driven. Keep the
+     derivation rule intact — offsets are still never stated in the spec.
+  5. Version gating: the file version reverts to its shipped home,
+     `FILE_HEADER::EXTENSION_MAJOR`@14 / `EXTENSION_MINOR`@16 — i.e. exactly
+     mechanism 2 as `src/IrisCodecExtension.cpp:912-913` implements it.
+     Update 4.2b rule 7, which currently names a preamble that will not exist.
+- **Two JSON-shape defects to fix in the same pass** (neither touches the
+  wire, both surfaced while specifying the validator):
+  - `recovery_codes` members are bare hex strings, while all six other enum
+    groups use the object form with a `description`. The emitter accepts both
+    (`generator/emit/cpp.py:76-87`), so nothing breaks today — but it leaves
+    all 17 recovery tags with no prose, which Phase 5's document generation
+    needs. Normalize them to the object form and write the descriptions.
+  - `underlying_type` is resolved by a direct `_TYPE_CPP` lookup
+    (`generator/emit/cpp.py:70`) with **no alias resolution**, while a
+    sentinel's `type` goes through `_canonical_type()` where aliases work.
+    So `"underlying_type": "recovery"` raises `SpecError` while
+    `"type": "recovery"` succeeds — the same word behaving two ways. Route
+    both through `_canonical_type()`.
+- **Done when:** `tests/ife_wire_parity_tests.cpp` compiles. Write it as a
+  **`static_assert` wall**: include both `IrisCodecExtension.hpp` and
+  `IFE_VTables.hpp` in one TU and assert every generated offset and size
+  equals its hand-written counterpart, e.g.
+  `IFE::vtables::TILE_TABLE::offset::ENCODING ==
+  IFE::Serialization::TILE_TABLE::ENCODING`. ~130 assertions, purely
+  mechanical, zero runtime cost, and it cannot drift — a spec edit that moves
+  a byte fails the build. This file is deliberately temporary: it dies with
+  the hand-written layer in Phase 6, having served as the parity gate for the
+  whole migration.
+
+#### 4.1 — `src/IFE_Bytes.hpp` — load/store primitives — ✅ DONE
+
+Header-only (genuinely: it is all templates and `constexpr`), `namespace IFE`,
+self-contained (it includes `IrisTypes.hpp` and
+`IrisCodecTypes.hpp` itself rather than inheriting v1's include-order
+fragility). Covers every width in `_TYPE_WIDTH`: `load<T>`/`store<T>` for the
+whole-width scalars, `load_u24`/`store_u24`, `load_u40`/`store_u40`, and
+`load_f16`/`store_f16`. Gated by `tests/ife_bytes_tests.cpp`.
+
+All three v1 defects are fixed and each is documented at the function that
+replaces it:
+
+- **Over-read.** v1 read a `u24` by loading four bytes and masking, a `u40` by
+  loading eight (`src/IrisCodecExtension.cpp:128,132`). These read exactly 3
+  and exactly 5.
+- **Runtime dispatch.** v1 chose byte order through `static std::function`
+  objects (`:166-177`). Replaced by `if constexpr`; `std::byteswap` is C++23,
+  so the swaps are hand-written `constexpr`.
+- **Wrong mask.** v1's big-endian `u24` reader masked with `U40_MASK`
+  (`:133`). Not carried forward.
+
+`f16` is implemented rather than rejected (decision 4.0-E): `half_to_float`
+is exact for all 65,536 inputs including subnormals, infinities and NaN
+payloads; `float_to_half` rounds to nearest, ties to even. The paired
+generator change shipped with it — `_TYPE_CPP["f16"]` is now `float`, and
+`emit_constants_header` decodes `f16` sentinels to float literals, so
+`ORIENTATION_90` emits as `90.0f` with its wire value (`0x55A0`) preserved in
+the doc comment. An `f16` **enum underlying type** now raises `SpecError`
+naming why: C++ has no `enum class : float`.
+
+**A test-design correction worth keeping.** The first version of the
+over-read test used guard bytes and passed *even with v1's defect
+reintroduced* — guard bytes prove nothing was **written** out of bounds, but
+an over-read lands inside the same buffer and is then masked away invisibly.
+That is precisely how the defect survived in v1 for years. Detecting it needs
+the field to end where the allocation ends: `test_packed_loads_do_not_over_read`
+heap-allocates exactly 3 and exactly 5 bytes, so a fourth or sixth byte is
+genuinely not ours. Under `-fsanitize=address` restoring v1's behaviour
+aborts with `READ of size 4` naming `IFE::load_u24`; without a sanitizer the
+same test is an ordinary passing round-trip.
+
+**The sanitizer job is therefore load-bearing, not optional hygiene** — it is
+the only thing standing between this class of bug and a silent return. 4.5's
+CI item must build the test targets with `-fsanitize=address,undefined`, not
+just the corruption tests.
+
+#### Toolchain decisions (settled 2026-08-07)
+
+- **C++20 stays; C++23 is not adopted.** The two features that would apply
+  were measured rather than assumed. `std::byteswap` compiles to the same
+  single instruction as the hand-written shift/mask form — both emit
+  `rev w0, w0` at `-O2` on arm64, and the compiler recognises the idiom — and
+  in any case the swap sits behind `if constexpr (endian::native == big)`, so
+  on every little-endian host it is discarded before codegen. `std::float16_t`
+  from `<stdfloat>` would have replaced `half_to_float`/`float_to_half`, but
+  the header does not exist on this project's own toolchain (Apple clang 21:
+  *'stdfloat' file not found*), and those functions are now exhaustively
+  tested across all 65,536 half patterns. Against that, raising the language
+  baseline costs downstream implementers — scanner vendors and independent
+  encoder authors — for whom `src/IrisCodecExtension.cpp:31-35` explicitly
+  says this code must be "completely independently implementable". Revisit
+  only if a concrete need appears, not on general principle.
+- **Dependencies fetch into a gitignored `.deps/`.** Iris-Headers lands at
+  `.deps/irisheaders-src/include`, a fixed path in the source tree, so a
+  syntax check or editor can find it without knowing which build directory is
+  in use — while `/.deps` in `.gitignore` guarantees it is never committed.
+  Preferred over a git submodule: a submodule adds a gitlink that every clone
+  and CI job must remember to initialise, and this project already uses
+  FetchContent, so a second mechanism would be the redundancy the style guide
+  forbids. The redirect applies only when IFE is the top-level project;
+  a parent consuming this repo keeps its own dependency layout.
+- **⚠ Iris-Headers is unpinned — `GIT_TAG "origin/main"`.** A push to that
+  repository can change this build with no change here, which means the
+  parity wall can fail for reasons unrelated to the schema and the published
+  document cannot be reproduced from a tag. Pinning is a one-word change
+  (`GIT_TAG <sha>`), deliberately left as a decision: both repositories share
+  a maintainer, so following `main` may be intentional. If the specification
+  is ever ratified from a build, pin first.
+
+#### 4.2 — `generated_source/IFE_Blocks.hpp` — generated block I/O
+
+Four sub-tasks, executed in order. Each ends green before the next begins.
+
+##### 4.2a — Thread version groups through the layout model — DONE
+
+Implemented with the initial layout model: `_concat_versioned` returns
+`(version, field)` pairs, `FieldLayout.since` records the introducing
+version, and `BlockLayout.header_sizes` / `entry_sizes` carry the
+cumulative size per version group. The steps below are the original spec,
+kept for the record; the "Done when" gate passes.
+`{"1.0": [...], "1.1": [...]}` into a plain field list and discards the
+version label, and `FieldLayout` has no `since` member — so no emitter can
+know which fields are post-1.0. Fix the model before the emitter needs it.
+
+- **v1 precedent — what this data is *for*:** `src/IrisCodecExtension.hpp:436-450`
+  (`FILE_HEADER::vtable_offsets`) shows the end product by hand:
+  `HEADER_V1_0_SIZE` computed from the last 1.0 field, the
+  `// Version 1.0 ends here.` marker, then `HEADER_SIZE` pointing at the
+  newest known version. The `since` label added here is exactly what lets the
+  emitter derive that shape instead of a human maintaining it. Visit
+  `:660-676` (`LAYER_EXTENT`) to see the same pattern on an array *entry* —
+  the reason `entry_sizes` is threaded alongside `header_sizes`.
+- **Read first:** `generator/model/layout.py` in full;
+  `generator/emit/cpp.py:113-194` (the only consumers of `FieldLayout` /
+  `BlockLayout`); `generator/emit/docs.py`.
+- **Steps:**
+  1. Add `since: str = "1.0"` to `FieldLayout`.
+  2. Change `_concat_versioned` to return `list[tuple[str, dict[str, Any]]]`
+     — `(version_label, field_spec)` pairs, still ascending by
+     `version_key`.
+  3. `_derive_fields` takes those pairs and sets `since=version_label` on
+     each `FieldLayout`. Signature change is internal — update all four call
+     sites in `derive_layout`.
+  4. Add to `BlockLayout`: `header_sizes: tuple[tuple[str, int], ...]` and
+     `entry_sizes: tuple[tuple[str, int], ...]` — cumulative byte size at the
+     end of each version group, ascending. With today's spec both are exactly
+     `(("1.0", header_size),)` / `(("1.0", entry_size),)`.
+  5. Touch **no** emitter. `emit_vtables_header` and `emit_layout_markdown`
+     must produce byte-identical output.
+- **Done when:**
+  ```
+  cp generated_source/IFE_VTables.hpp /tmp/vt.before
+  cp generated_docs/layout_tables.md /tmp/lt.before
+  python3 -m generator && diff /tmp/vt.before generated_source/IFE_VTables.hpp && diff /tmp/lt.before generated_docs/layout_tables.md
+  python3 -m generator --check
+  ```
+  Both diffs empty, `--check` exits 0.
+
+##### 4.2b — Emitter scaffolding, block handles, readers — ✅ DONE
+
+Emits **two** files: `IFE_Blocks.hpp` (828 lines, declarations) and
+`IFE_Blocks.cpp` (1,185 lines, definitions). See "Generated code ships as a
+header and a source" below for why, and for the `IFE_HEADER_ONLY` mode.
+
+The primitive hierarchy the schema declares appears as real base classes.
+State and shared accessors live on the primitive once, not per block.
+
+Three things the implementation forced that the task text did not anticipate:
+
+- **Offset accessors are defined out of line.** Each returns a handle *by
+  value* and the block reference graph has cycles, so no declaration order
+  makes every target complete at its point of use.
+- **Entries carry `__size`.** An entry constructs child handles
+  (`IMAGES.IMAGE_ENTRY` → `IMAGE_BYTES`), and those need the file size for
+  their bounds check.
+- **Version markers land at the structure level, not inside
+  `_emit_size_offset`.** The task said to put them in that function so all six
+  structure kinds got them from one implementation. Once written, that placed
+  a marker inside both the `size` and `offset` namespaces — v1 has one enum
+  and therefore one marker, and duplicating it added noise without
+  information. The logic is still a single helper, called once per structure,
+  beside the cumulative size constants where the boundary means something.
+  Primitives get none: a primitive can never gain a field, so a marker there
+  would promise an amendment point that cannot legally exist.
+
+**The parity wall's latent bug is fixed here, as planned.** It compared
+`header_size` — the newest-version total — against v1's 1.0 total, so a legal
+append failed the build blaming the wrong thing. It now compares
+`header_size_v1_0` / `entry_size_v1_0`. Verified end to end: bumping the
+document to 1.1 and appending `TILE_TABLE.FOCUS_PLANES` produces a gated
+`std::optional<std::uint16_t> focus_planes()`, emits both boundary markers,
+and the wall **passes**.
+
+##### 4.2c — Generated validators — ✅ DONE
+
+`validate()` per block reproduces v1's checks (`IrisCodecExtension.cpp:778-803`
+and the array bounds check at `:1641-1686`), and `validate_deep()` walks the
+`points_to` graph — **including edges that leave from array entries**, which is
+where `IMAGE_BYTES` and `ANNOTATION_BYTES` hang and which v1's hand-threaded
+chains made easy to forget. Codes, operands and offsets are reported
+unformatted; no generated validator allocates, throws or builds a string.
+
+Gated by `tests/ife_blocks_tests.cpp`, which assembles a complete 202-byte
+file, reads every field back, then breaks it one byte at a time. Passes under
+`-fsanitize=address,undefined`.
+
+Three things the implementation settled that the task text had wrong:
+
+- **`VisitPath`, not a visited set.** The task specified a fixed-capacity set
+  of every visited offset. That is both too small and semantically wrong: a
+  file may hold thousands of annotations each with its own byte array, all
+  legitimate separate visits, and a global set would reject the second of two
+  entries pointing at one target. A cycle is an offset that reappears on the
+  *ancestry*, which is bounded by graph depth — 16 entries, no allocation.
+- **`VERSION_TOO_NEW` is never returned.** Append-only guarantees a newer
+  file's 1.0 prefix is readable, and 4.0-G forbids adding a rejection path.
+  The code stays in the enum for the runtime to raise as a *warning*, matching
+  v1 (`:853-865`), which warns and continues.
+- **`FILE_SIZE` vs. the size the OS reports is not checked here.** v1 does it
+  in `validate_header` (`:842-848`), but it is a fact about the file rather
+  than about the layout. It belongs to the 4.4 runtime, which knows what the
+  OS said.
+
+**A cycle is unreachable in this schema, and the test says so.** Pointing an
+offset at the wrong block type is caught by the recovery tag first, so a chain
+can only revisit an offset if every tag along it matches — and no block type
+appears twice on any path. `Check::CYCLE` is defence in depth for a corrupted
+file whose tags happen to line up; `VisitPath` is therefore tested directly
+rather than through a crafted file.
+
+##### 4.2d — Generated writers — ✅ DONE (bar the v1-oracle round-trip)
+
+Emitted for all 16 blocks: a `<Pascal>CreateInfo`, a `size_of()`, and a
+`store()` — 32 generated functions replacing v1's 22 hand-written `SIZE_*` and
+`STORE_*`, none of which survive. The `ValidationHooks` dispatch point is
+emitted with them, per 4.0-B, and is exercised in both states.
+
+Three things the implementation settled that the task text did not:
+
+- **`EXTENSION_MAJOR`/`MINOR` stay in `CreateInfo`.** They are not `constant`
+  in the schema, and choosing what version to stamp is a *policy* — the
+  encoder declaring what it wrote. Stratum B is mechanical; that decision
+  belongs to 4.4, which will set them from `VERSION_WRITTEN`. Putting it in
+  the generator would have been the first semantic rule in generated code.
+- **`size_of()` for a plain `block` is its header alone.** `IMAGE_BYTES`'
+  label-plus-stream payload is not schema-described (the same absence that
+  makes `TILE_PIXEL_DATA` unframed, decision 10), so placing it is the
+  runtime's job. Stated at the emitted declaration so it cannot be mistaken
+  for an oversight.
+- **An unknown primitive field now raises.** `_PRIMITIVE_FIELDS` names the
+  five the writer knows how to fill; a sixth added to the schema stops the
+  generator rather than emitting a `store()` that silently leaves bytes
+  unwritten.
+
+**A test-design correction, and the reason 4.5's round-trip item is not
+enough on its own.** The round-trip test — build a file through `store()`,
+deep-validate, read every field back — **passes with a `u24` emitted through
+`store<std::uint32_t>`**. Writer and reader agree (the spilled fourth byte is
+zero and `load_u24` never looks at it), and the byte it clobbers belongs to a
+block written later, which repairs the damage before anything reads it.
+Ordering hides it. `test_writers_stay_within_size_of` closes it by poisoning
+either side and asserting `store()` touches exactly `size_of()` bytes; with
+the same defect reintroduced it fails on `TILE_OFFSETS` and `ANNOTATIONS`,
+naming the byte. This is C6 in miniature — two descriptions agreeing is not
+correctness — and it is why the **v1-oracle round-trip (open item 2) is still
+outstanding**: nothing here yet reads bytes produced by the shipped encoder.
+
+The original task description follows, for the record.
+
+- **v1 precedent — the writer pattern to generate:**
+  `src/IrisCodecExtension.hpp:464-471` (`HeaderCreateInfo` + its
+  `STORE_FILE_HEADER` declaration — the whole pattern in eight lines) and
+  `:520-531` (`TileTableCreateInfo`, the same for a richer block). For the
+  bodies: `src/IrisCodecExtension.cpp:971-1000` (`STORE_FILE_HEADER` — note
+  it writes the constant and validation fields itself rather than taking
+  them from the caller) and `:1744-1772` (the array case in three parts —
+  `STORE_EXTENT` writes one entry, `SIZE_EXTENTS` computes
+  `HEADER_SIZE + count * ENTRY::SIZE`, `STORE_EXTENTS` writes the header
+  then loops; note it range-checks the count against `UINT32_MAX` and throws
+  with the offending value and the spec section, which is the error style to
+  keep at the 4.4 boundary).
+- **Steps:** per block emit a `<Pascal(block)>CreateInfo` struct (reuse
+  `_pascal`), a `size_of(const …CreateInfo&)`, and a
+  `store(Byte* __base, Offset __offset, const …CreateInfo&)` — the same trio
+  v1 declares by hand at `src/IrisCodecExtension.hpp:464-470`.
+  - `CreateInfo` member names are the JSON field names verbatim — mechanical,
+    no mapping table, and they line up with `vtables::` naming.
+  - `constant` fields are **excluded** from `CreateInfo` and written
+    automatically by `store()`, as are `VALIDATION` (= `__offset`) and
+    `RECOVERY` (= the block's tag). Nullable `points_to` members default to
+    `NULL_OFFSET`.
+  - Array `CreateInfo`s carry a pointer + count (`const LayerExtentEntry*`,
+    `std::uint32_t`) and their `store()` writes `STRIDE = <entry_size>` and
+    `COUNT`, then the entries. Blob `store()` takes `const Byte* + Size`.
+  - Two generated functions per block (32 in total) replace v1's **22**
+    hand-written free functions — 9 `SIZE_*` and 13 `STORE_*` — none of which
+    survive.
+  - **Emit the validation hook (4.0-B).** `store()` ends by calling the
+    block's own `validate()` — structural, unconditional, a few compares —
+    and then, *if* the writer context's `const ValidationHooks*` is
+    non-null, calls through it for spec-conformance checks, passing the same
+    `CreateInfo` and target offset it was given — the layer validates at the
+    API boundary, as a Vulkan layer does, never against generated internals.
+    The hook call site must be
+    emitted now even though 4.6 implements the layer: retrofitting a
+    dispatch point later is a breaking change. Never a silent no-op.
+- **Done when:** regeneration drift-clean; 4.5's round-trip property tests
+  pass for all 16 blocks.
+
+#### 4.3 — Byte-window abstraction (kills the per-block `#ifdef`) — ✅ DONE
+
+`src/IFE_Window.hpp` / `.cpp` and `tests/ife_window_tests.cpp`.
+`IFE::Window` resolves residency *before* a handle is built, in two modes:
+**resident** (a native mmap — `map()` is a bounds check and a pointer
+addition) and **remote** (ranges fetched on demand and cached). Generated
+handles still hold nothing but `const BYTE*`.
+
+**Done when, measured:** `__EMSCRIPTEN__` appears **0** times in
+`generated_source/` and **0** times in `src/IFE_Bytes.hpp`; the WASM branch is
+one `#if` block in one translation unit. For scale, the hand-written pair it
+replaces carries **116** (21 in the header, 95 in the `.cpp`) across **88**
+`check_and_fetch_remote` call sites.
+
+Two decisions the task text did not settle:
+
+- **The transport is a function pointer, not a virtual.** `Window::Fetch` is
+  called once per cache *miss*, not per access, so dispatch cost is
+  irrelevant — what the seam buys is that the cache, the bounds arithmetic and
+  the failure path are all driven natively by a stub in
+  `ife_window_tests.cpp`. Only the ranged HTTP request itself is browser-only.
+  This is the same reasoning as 4.1's sanitizer job: a branch no available
+  host executes is a branch no test can check, so the untestable part is made
+  as small as it can be rather than merely documented.
+- **A cached page owns its own allocation** (`unique_ptr<BYTE[]>`, not a
+  `std::vector` inline in the element). A pointer handed out by `map()` must
+  survive the cache growing; `test_cached_pointers_survive_cache_growth` holds
+  one across a reallocation and reads it back.
+
+**The WASM branch is compiled, not assumed.** `emcc` builds
+`src/IFE_Window.cpp` clean under `-Werror`, `IFE::fetch_http_range` is a
+defined symbol in the resulting object and absent from the native one, and
+`.github/workflows/ci.yml` gained a job that does exactly this — no other job
+compiles that side of the `#if`.
+
+**Not carried forward from v1:** the `const_cast` that rewrote the caller's
+`__base`, and the two-round-trip fetch (header, then full size) that existed
+only because a block discovered its own size after reading its header. The
+runtime knows what range it wants before it asks.
+
+The original task description follows, for the record.
+
+v1 injects `check_and_fetch_remote` into **15** separate readers behind
+`#ifdef __EMSCRIPTEN__`, and the pair carries **116** `__EMSCRIPTEN__`
+branches (21 in the header, 95 in the `.cpp`). Generated code must contain
+**zero**.
+
+- **v1 precedent — the problem, in its own words:**
+  `src/IrisCodecExtension.cpp:1733-1742` (`LAYER_EXTENTS::check_and_fetch_remote`
+  — one representative injection point: fetch the header, re-point `__offset`,
+  re-fetch at full size, then rewrite the caller's `__base` through a
+  `const_cast`) and `:965-972` (`FILE_HEADER`'s variant, which differs
+  slightly — the duplication is the point). Each of the 15 sites is called
+  from the top of a reader via `const_cast<T&>(*this).check_and_fetch_remote(__base)`
+  — see `:1636-1638`, `:1643-1645`, `:1689-1691` for three in a row.
+  `src/IrisCodecExtension.hpp:120-186` shows the same split reaching the
+  public API: the entry points are declared twice, once per branch of
+  `#ifndef __EMSCRIPTEN__`. Read enough of this to see why it must not be
+  reproduced 16 times in generated code.
+- **Design:** generated handles only ever hold `const Byte* __base`. Residency
+  is the runtime's problem, resolved **before** a handle is constructed:
+  `IFE::Window` (in `src/IFE_Bytes.hpp` or its own small header) exposes
+  `const Byte* map(Offset, Size)`; the native implementation returns
+  `base + offset` from the mmap; the WASM implementation performs the ranged
+  fetch and caches. One `#if defined(__EMSCRIPTEN__)` in one file.
+- **Done when:** `grep -c __EMSCRIPTEN__ generated_source/*.hpp` is 0, and the
+  WASM branch exists in exactly one translation unit.
+
+#### 4.4 — `include/IrisFileExtension.hpp` / `src/IFE_Runtime.cpp` — semantic layer and public API — ✅ DONE
+
+The four v1 entry points, the `Abstraction::` structs, and `recover_file_structure`
+(new), on top of the generated handles. Every byte offset, every `LOAD_U*`, every
+`if (__version > IRIS_EXTENSION_1_0); else goto`, and every `#ifdef __EMSCRIPTEN__`
+is gone from the semantic layer; a reader body is a sequence of accessor calls.
+
+**Done when — met, and executable.** `tests/example_parity.cmake` compiles
+`examples/slide_info_abstraction.cpp` twice, differing *only* in which header it
+includes, runs both on one slide written by the shipped encoder, and requires
+byte-identical output. Red-green: swapping `x_extent` for `y_extent` in the
+runtime fails both it and `ife_runtime_tests`.
+
+Three things the port forced that the task text did not anticipate:
+
+- **The two layers were mutually exclusive at compile and link time.** Both
+  defined `IFE::Abstraction` and the same four entry points — which is
+  exactly what made the cutover a one-line include change — so they could not
+  share a translation unit or a binary while v1 existed. An `#error` in the
+  header enforced the split, `IFE_Runtime.cpp` stayed out of
+  `IrisFileExtensionLib`, and the runtime tests took their fixture from a
+  separate *process* (`ife_v1_slide_writer`) rather than a linked function.
+  Both mechanisms were removed with v1 in 6.3/6.7.
+- **`FileMapEntry::datablock` could not carry over.** Its type was
+  `Serialization::DATA_BLOCK`, a class that dies with v1, and there is nothing
+  to `static_cast` to: a generated handle is *constructed* from an offset, not
+  downcast. The entry now carries `{type, offset, size}` and the caller builds
+  whichever handle it wants — strictly more capable, and the only place a
+  consumer's code changes at the cutover.
+- **`is_iris_codec_file` is `validate()`, not two loads.** `MAGIC` is a
+  `constant` field, so the generated layer checks it rather than exposing an
+  accessor; `FILE_HEADER::validate()` is exactly v1's two checks plus the
+  bounds check v1 had to be given separately.
+
+`recover_file_structure` scans for the signature every block carries — a `u64`
+equal to its own offset followed by a `u16` in the tag set — and is tested
+against a file whose root pointers have been destroyed: it finds all ten
+self-validating blocks where `generate_file_map` cannot get past byte 22. The
+root is not recoverable and is not reported, having no `VALIDATION` field.
+
+The original task description follows, for the record.
+
+- **v1 precedent — this task is a port, not a design.** The entire semantic
+  layer already exists and works; read it before writing anything.
+  `src/IrisCodecExtension.hpp:119-186` (the four entry points with their
+  doc-comments — the contract Iris-Codec consumes, including the
+  "START HERE" and "ALWAYS CREATE A FILE MAP BEFORE…" notes, which are
+  behavioural requirements, not decoration) and `:187-323` (the whole
+  `Abstraction::` namespace — every struct to carry over verbatim).
+  For the bodies: `src/IrisCodecExtension.cpp:275-282` (`is_Iris_Codec_file`
+  — two loads, no validation); `:283-300` (`validate_file_structure` — the
+  header → tile-table → metadata chain, each `validate_full`, early-return on
+  failure); `:301-330+` (`abstract_file_structure` — the traversal order and
+  the optional-block presence checks such as `METADATA.attributes(__base)`);
+  `:1687-1732` (`read_layer_extents` — the lift-parameters-not-data idiom,
+  including the trailing downsample computation, which is exactly the kind of
+  semantic step that cannot be generated).
+- **Read first (in addition):** `examples/slide_info_abstraction.cpp` — the
+  consumer whose behaviour must not change, and the acceptance check below.
+- **Steps:**
+  1. Copy the `Abstraction::` structs (`Header`, `Cipher`, `TileEntry`,
+     `TileTable`, `AssociatedImage`, `AssociatedImages`, `Annotation`,
+     `AnnotationGroup`, `Annotations`, `File`, `FileMap`) **verbatim** into
+     `IFE_Runtime.hpp`. They are the Iris-Codec contract; changing them turns
+     the Phase 6 cutover from a re-point into a rewrite.
+  2. Keep the v1 entry-point names and signatures exactly:
+     `is_Iris_Codec_file`, `validate_file_structure`, `abstract_file_structure`,
+     `generate_file_map`. Add `recover_file_structure` (new).
+  3. Implement each by constructing `blocks::FILE_HEADER` and walking the
+     generated handles. All offset arithmetic disappears — a reader body
+     becomes a sequence of accessor calls.
+  4. **One** function converts generated status to the Iris result:
+     `Iris::Result to_result(const blocks::Status&)`, formatting the message
+     from the `Check` code plus `found`/`expected`/`at`. Every `std::string`
+     in the new layer is built here.
+  5. `recover_file_structure`: scan the file for a `u64` equal to its own
+     offset immediately followed by a `u16` in the recovery-tag set, per 4.0-A.
+     Reuse the tag values from `IFE_Constants.hpp` — never a second literal
+     table.
+  6. Note the v1 → v2 tag renames when porting: `RECOVER_HEADER` →
+     `RECOVER_FILE_HEADER`, `RECOVER_ATTRIBUTES_SIZES` →
+     `RECOVER_ATTRIBUTE_SIZES`, `RECOVER_ASSOCIATED_IMAGES` → `RECOVER_IMAGES`,
+     `RECOVER_ASSOCIATED_IMAGE_BYTES` → `RECOVER_IMAGE_BYTES`. Values are
+     unchanged; only the names moved.
+- **Done when:** `examples/slide_info_abstraction.cpp` builds and runs against
+  `IFE_Runtime` with only its include line changed, producing identical output
+  to the v1 build on the same file.
+
+#### 4.5 — Tests (the gate for every task above)
+
+- **Precedent for the harness:** `tests/ife_bytes_tests.cpp` (file header,
+  the `IFE_CHECK` macro, the `g_failures` counter, per-test function shape)
+  and its registration under `IFE_BUILD_TESTS` in `CMakeLists.txt`
+  (`enable_testing` / `add_executable` / `target_compile_features cxx_std_20`
+  / `add_test`). Follow both exactly — self-contained, no framework, non-zero
+  exit on failure, one `add_executable` + `add_test` per file.
+- **Precedent for what to assert:** the v1 function each test covers is named
+  in its bullet below; read that function before writing the test, because
+  its checks *are* the specification of correct behaviour.
+
+- [x] **CMake first — done, superseded by 4.0-F execution.** `IFE_BUILD_TESTS`
+      has no substrate requirement and `ife_memory_tests` no longer exists;
+      the `IFE_USE_FASTFHIR_SUBSTRATE` option is deleted with the substrate.
+- [x] `tests/ife_bytes_tests.cpp` (gates 4.1) — **done.** Round-trip every width
+      including `u24`/`u40` at boundary values (0, 1, max, max-1) and at
+      unaligned addresses; assert `load_u40` touches exactly 5 bytes by
+      placing the field at the end of a guarded buffer.
+- [x] `tests/ife_blocks_tests.cpp` (gates 4.2b–d) — **done (2026-08-12).**
+      `store → validate → read`
+      property tests over randomized `CreateInfo`s for all **16** blocks
+      (v1 round-trip pair to model on: `STORE_EXTENTS`
+      `src/IrisCodecExtension.cpp:1756-1772` against `read_layer_extents`
+      `:1687-1732`);
+      `stride() > entry_size` forward-compat read; a synthetic `1.1` field
+      group added to a **copy** of the spec under `tests/fixtures/` to exercise
+- [x] **Version-gating test (the core feature — do not skip) — done
+      (2026-08-12): `ife_version_gating_tests` + `ife_version_gating_backward_tests`
+      in the suite, both green.** Against the
+      `1.1` fixture assert, in order: a 1.0 file read by the 1.1 build returns
+      empty `std::optional` for every 1.1 field and correct values for every
+      1.0 field; a 1.1 file read by the same build returns both; a 1.1 file
+      read with `__version` forced to 1.0 returns only the 1.0 prefix and
+      never reads past `header_size_v1_0`; an array whose stored `stride()`
+      exceeds the generated `entry_size` iterates correctly and skips the
+      unknown tail; and a newer-minor file **warns rather than fails**
+      (mechanism 8 — v1's warning path is `src/IrisCodecExtension.cpp:853-865`).
+      Plus a generator-level assertion that the emitted
+      `IFE_VTables.hpp` and `IFE_Blocks.hpp` contain exactly one
+      `// Version <V> ends here.` marker per version group per structure.
+- [ ] `tests/ife_blocks_corruption_tests.cpp` (gates 4.2c) — v1 source for
+      the expected failure behaviour: `src/IrisCodecExtension.cpp:778-803`
+      and `:1641-1686`. Truncation,
+      clobbered `VALIDATION`, clobbered `RECOVERY`, `stride == 0`,
+      `count` overflow, and an offset cycle; each must return the specific
+      `Check` code, never crash and never read out of bounds (run under
+      `-fsanitize=address,undefined`).
+- [x] `tests/ife_runtime_tests.cpp` (gates 4.4) — **done (2026-08-12).** v1 source:
+      `src/IrisCodecExtension.cpp:283-330`. Encode a synthetic slide,
+      `abstract_file_structure`, compare field-by-field to the input;
+      `generate_file_map` ordering; `recover_file_structure` against a file
+      with a clobbered `FILE_HEADER`.
+- [x] **CI — done, `.github/workflows/ci.yml`.** Four jobs: `--validate` plus
+      the `--check` drift gate; a `-DIFE_BUILD_TESTS=ON -DIFE_RUN_GENERATOR=ON`
+      build running `ctest`, so an emission bug fails before merge rather than
+      at the next regeneration; the same under `-fsanitize=address,undefined`,
+      **which is load-bearing rather than hygiene** (4.1); and a **big-endian
+      s390x job** under qemu. The last is not optional polish: every
+      hand-written big-endian path in this project's history has been wrong,
+      and it is the only gate that executes one.
+
+#### 4.6 — Validation layer (generated; implements decision 4.0-B) — ✅ DONE
+
+`spec/ife_fields.json` gained normative clauses; `generated_source/IFE_Validation.{hpp,cpp}`
+emits them; `tests/ife_validation_tests.cpp` asserts both paths. Eleven fields
+carry a clause, reproducing what v1 checked inline: `X_TILES`/`Y_TILES` >= 1,
+strictly increasing layer scale, enum membership on five fields, and the two
+required root offsets.
+
+**The predicate vocabulary stayed capped, and shrank.** The plan allowed four
+predicates; only **two** turned out to be new. Non-null is already `nullable:
+false`, and an enum field's domain is already its member list — both were
+derivable from what the schema states. So `conformance` adds `minimum`,
+`maximum` and `ordering` as predicates, plus `level`, `section` and
+`requirement` for the diagnostic. No expression syntax, and none was wanted:
+every check is a comparison against a stated bound or a switch over declared
+members.
+
+**Done when — met.** Detached, `store()` costs one null check and the
+structural `validate()`, and a spec-violating file stores successfully (asserted,
+because that is the half of 4.0-B most easily lost). Attached, each violation
+returns `Check::CONFORMANCE` and reports a sentence citing its section —
+*"LAYER_EXTENTS.LAYER_EXTENT.X_TILES shall encode the number of 256 pixel tiles
+in the horizontal direction and shall be greater than zero. Per the IFE
+specification Section 2.4.1."* Red-green: disabling the range predicate in the
+emitter fails seven assertions.
+
+Three things worth recording:
+
+- **`ValidationHooks` was already emitted, in `IFE_Blocks.hpp`, not
+  `IFE_Runtime.hpp`.** 4.2d put it where the call site is, which is the only
+  place it can be — `store()` takes it. Step 1 of this task was already done,
+  a year early in plan-time, exactly as intended.
+- **`Check` gained `CONFORMANCE`.** A clause violation is not a structural
+  failure and must not report as one; the file is perfectly readable.
+- **Layers chain, and it is tested.** A second hook set in front of the
+  generated one runs, delegates through `next`, and the generated layer still
+  catches the violation.
+- **It is its own target**, kept out of `IrisFileExtensionLib` by an explicit
+  `list(REMOVE_ITEM ...)` on the generated-source GLOB. Verified: `nm` finds no
+  `conformance_layer` in the shared library.
+
+The original task description follows, for the record.
+
+The optional, runtime-attachable spec-conformance layer. 4.2d emits the call
+site; this task builds what sits behind it. May land after 4.4 — but the hook
+must already exist, or adding it later breaks the ABI.
+
+- **v1 precedent — the checks to move here:**
+  `src/IrisCodecExtension.cpp:1671-1677` (`LAYER_EXTENTS::validate_full` —
+  `X_TILES`/`Y_TILES` ≥ 1 and strictly-increasing scale, each with a message
+  citing "IFE specification Section 2.4.1") and `:670-700`
+  (`VALIDATE_ENCODING_TYPE` / `VALIDATE_PIXEL_FORMAT` — enum-membership
+  checks, note both are already version-gated). Also `:1758-1761`
+  (`STORE_EXTENTS`' count range check) for the message style: state the
+  offending value, then the clause it violates.
+- **Steps:**
+  1. Define `ValidationHooks` in `src/IFE_Runtime.hpp`: a POD of function
+     pointers, one per block, plus a `next` pointer (so layers chain, as
+     Vulkan's do) and a caller-supplied diagnostic callback. It is carried by
+     the writer context and bound once at creation — no mutable global, no
+     dispatch tables, no manifest loader. See 4.0-B for what is and is not
+     borrowed from Vulkan.
+  2. Add normative clauses to `spec/ife_fields.json` per field — the
+     `shall`/`should`/`may` tagging Phase 2 already calls for, carrying the
+     predicate and the spec section reference. **Predicates come from the
+     capped vocabulary only** (range, enum membership, ordering, non-null;
+     see "The schema is capped, permanently" in the guiding principles).
+     There is no expression syntax and there must never be one. A rule that
+     will not fit stays as prose and is hand-written into the layer — that
+     is the designed escape valve, not a shortfall.
+  3. Emit the layer implementation from those clauses into
+     `generated_source/IFE_Validation.cpp` — register it in
+     `generator/pipeline.py::_render` exactly as 4.2b registers
+     `IFE_Blocks.hpp`. It is a `.cpp`, and `CMakeLists.txt:128` already GLOBs
+     generated `.cpp` files, so it compiles with no build edit.
+  4. Ship it as its own CMake target so an application links it only when it
+     wants validation.
+- **Done when:** with the layer detached, `store()` costs one null check and
+  the structural `validate()`; with it attached, every "shall" clause in the
+  JSON is enforced and each diagnostic cites its spec section. A test asserts
+  both paths, and that a conformance violation is caught **only** when
+  attached.
+
+**Ordering:** ~~4.0 (decisions A–G)~~ → ~~4.0-H (wire-format correction)~~ →
+~~4.1 (primitives)~~ → ~~4.2a (version threading)~~ → ~~4.2b (handles)~~ →
+~~4.2c (validators)~~ → ~~4.2d (writers)~~ → ~~4.3 (byte window)~~ → ~~4.4 (runtime)~~ → ~~4.6 (validation layer)~~ — **Phase 4 complete**,
+with 4.5's matching test file landing in the same session as the task it
+gates. 4.6 may slip later than 4.4, but **4.2d must emit its hook on
+schedule** — that call site is ABI. **Exit unchanged** from the Phase 4 checklist above.
+
+### Phase 4 — state of play (2026-08-07)
+
+**Done.** 4.0 decisions A–H; 4.0-H wire parity; 4.1 byte primitives; 4.2a
+version threading; 4.2b block handles; 4.2c validators; 4.2d writers;
+4.3 byte-window abstraction; 4.4 the semantic layer and public API; 4.6 the
+conformance layer; and the v1-oracle round-trip that was open item 2.
+
+**What exists.** The generated layer reads and validates a file: typed handles
+per block over `IFE_Bytes` primitives, structural validation per block, and a
+`points_to` walk that follows edges leaving array entries as well as headers.
+Four generated artifacts (`IFE_Constants.hpp`, `IFE_VTables.hpp`,
+`IFE_Blocks.hpp` + `IFE_Blocks.cpp`) plus one hand-written header
+(`src/IFE_Bytes.hpp`), all reproducible from `spec/` alone.
+
+**Phases 4 and 5 are complete.** A file can be encoded, validated, mapped, recovered
+and decoded entirely through generated-layer code; the conformance layer sits
+behind 4.2d's hook and is attachable at runtime. Every 4.0 decision is closed.
+What remains is Phase 5 (the AsciiDoc document pipeline) and Phase 6 (bindings,
+corpus, the Iris-Codec cutover, and retiring `src/IrisCodecExtension.*`). **Nothing outside the tests consumes any of it** —
+`IrisFileExtensionLib` still compiles `src/IrisCodecExtension.cpp`, which
+remains the implementation that does the work. The cutover is Phase 6.
+
+**Gates in force.**
+
+| Gate | What it pins |
+|---|---|
+| `python3 -m generator --validate` | tag and enum conflicts, dangling references, type vocabulary, sequence integrity, block/tag order |
+| `python3 -m generator --check` | generated artifacts match a fresh render |
+| `ife_wire_parity_tests` | ~100 `static_assert`s: the **1.0 prefix** of every block equals shipped IFE 1.0 |
+| `ife_bytes_tests` | scalar and packed load/store, half precision exhaustively over all 65,536 patterns |
+| `ife_blocks_tests` (×2, compiled and header-only) | handles read what was written; corruption produces the specific `Check` code |
+| `ife_bytes_tests::test_wire_byte_order` | the literal bytes a field occupies on disk, both directions — the only test that does not round-trip `store` through `load`, which cancels a byte-order error exactly when there is one |
+| `ife_v1_oracle_tests` | the generated readers against **bytes the shipped v1 encoder wrote** — the only gate not comparing two descriptions of the format |
+| big-endian job (s390x under qemu, `.github/workflows/ci.yml`) | every claim above, on a host whose byte order is the opposite of every developer machine |
+
+All four binaries pass under `-fsanitize=address,undefined`. `ife_bytes_tests`
+and `ife_blocks_tests` also pass on s390x.
+
+**Byte order is now tested rather than reasoned about.** The big-endian job was
+added after two independent attempts at hand-written big-endian packed-width
+code proved wrong — v1's `__BE_LOAD_U24` (masked with `U40_MASK`) and this
+migration's first `IFE_Bytes.hpp` branch (swapped over `N` instead of
+`sizeof(T)`, so a `u24` loaded as `value << 8`). Neither was reachable by any
+test on any available host. Run against s390x, **the pre-existing tests catch
+both** — the suite was never weak, it was never executed anywhere it mattered.
+`load_bytes` is now branchless (correct on every host by construction);
+`store_bytes` keeps a compile-time branch because it is worth 6 instructions on
+`u40`, and that branch is what the s390x job exists to cover.
+
+**Open.** Nothing blocking. 4.0-D closed 2026-08-09.
+2. ~~**No test reads bytes written by the shipped encoder.**~~ **CLOSED —
+   `tests/ife_v1_oracle_tests.cpp`.** v1's `STORE_*` functions write a
+   complete file (linked from `IrisFileExtensionLib`); the generated handles
+   read it back; every assertion compares against the values that went *in*,
+   never against v1's reader. Blocks are written leaves-first because v1's
+   writers validate what they reference.
+
+   Retiring the `MAGIC_BYTES` macro is what made it possible — before that the
+   two layers could not appear in one translation unit.
+
+   **Red-green, and the result is worth recording.** With the emitter
+   deliberately reading a `u24` through `load<std::uint32_t>` — correct offset,
+   wrong width — the gates behave as follows:
+
+   | Gate | Notices? |
+   |---|---|
+   | `python3 -m generator --check` | no |
+   | `ife_wire_parity_tests` | no — offsets are identical either way |
+   | `ife_bytes_tests` | no — the primitive itself is unchanged |
+   | `ife_blocks_tests` | **yes** |
+   | `ife_v1_oracle_tests` | **yes** |
+
+   Two gates catch it, and the two that would otherwise have been the whole
+   defence do not. `ife_blocks_tests` catches it only because 4.2d gave it
+   writers to disagree with the readers; the class it still cannot reach is a
+   generated reader and writer that agree with *each other* and differ from the
+   shipped encoder — a wrong type at the right width, say. Nothing
+   self-consistent can detect that by construction, which is the whole argument
+   for keeping v1 alive until the cutover.
+
+   **Known limit, deliberately accepted.** v1 requires every tile entry to
+   address bytes inside the file, so the complete-file test cannot use a 5-byte
+   `u40` offset without a >4 GB fixture. `test_v1_packed_widths_at_full_width`
+   covers that by driving `STORE_TILE_OFFSETS` alone, with every byte of the
+   `u40` and `u24` significant, and reading the array back directly.
+
+**Verified for this sign-off:** `--validate` clean; `--check` clean and
+regeneration byte-stable; 4/4 tests pass in both the normal and
+ASan+UBSan builds; every block's 1.0 prefix matches shipped IFE 1.0 (15 with
+layout asserts — CIPHER is the bare universal header, asserted via the other
+15); generated output reproduces from a clean tree.
+
+## Phase 5 — Specification document pipeline (AsciiDoc) — ✅ DONE
+
+`spec/ife_spec.adoc` (the narrative, converted), `generator/emit/docs.py`
+(33 fine-grained includes), `spec/build_document.sh` (one command, both
+outputs), and a CI job. `spec/ife_spec.md` is deleted: two narratives is the
+drift-prone duplication the whole design exists to avoid.
+
+**Exit met.** One command renders HTML and PDF from `ife_spec.adoc` plus the
+JSON, with zero hand-written layout content and no preprocessor anywhere.
+Verified: 163 KB HTML, 857 KB PDF, warning-free, 28 tables, 0 unresolved
+includes.
+
+**pandoc was evaluated and rejected on a measured fact:** it has no AsciiDoc
+*reader* — `asciidoc` appears only among its output formats. Adopting it would
+mean reverting the source to Markdown and writing the preprocessor this design
+exists to avoid, plus installing a LaTeX engine. `asciidoctor -b docbook |
+pandoc` works (verified) and is kept as a fallback for anyone on a Ruby too old
+for asciidoctor-pdf, which needs >= 3.2.
+
+Three things the conversion surfaced that the task text did not anticipate:
+
+- **The document described a structure that no longer exists.** §2.3 "File
+  Preamble" and its "first eight bytes are version-invariant" prose predate the
+  layout correction that deleted the standalone preamble. The three shared
+  anchors now map to the primitives that replaced them
+  (`{{preamble}}` -> `primitive_FILE_HEADER`, 6 B, not 8). **The prose is still
+  wrong and is left for a human**: rewriting normative text is a content change,
+  not a format conversion. `BYTE_ARRAY` has no anchor at all, so the blob-array
+  prefix appears in no section.
+- **Orphaned generated files were invisible.** A renamed block left its old
+  `.adoc` on disk, the narrative kept including it, and `--check` said nothing —
+  publishing a table with no source. The pipeline now fails `--check` on
+  orphans and removes them on regeneration. This applied to `generated_source/`
+  equally; docs were simply where it would have been silent.
+- **Asciidoctor exits 0 on a missing include**, writing "Unresolved directive"
+  into the output instead. The exit code is therefore not the gate;
+  `build_document.sh` greps for it, so a local build fails exactly as CI does.
+  Red-green verified by pointing an include at a renamed block.
+
+The normative content is unchanged: 101 shall/should/may keywords in rendered
+text before and after, 31 headings, 68 list items. The only difference is three
+keywords inside a non-rendered comment block.
+
+The original task description follows, for the record.
+
+**Toolchain decision: AsciiDoc via Asciidoctor, with its native `include::`
+directive — not Markdown with a bespoke `{{...}}` anchor syntax.** Custom
+anchors mean writing and maintaining a preprocessor that will only grow,
+while AsciiDoc's include mechanism already does the interleaving and brings
+numbered sections, cross-references, figure and table captions, admonitions,
+a table of contents, and PDF plus HTML output from one source. This is how
+Khronos builds the Vulkan specification: `vk.xml` generates AsciiDoc include
+files that the hand-written narrative pulls in, and the same sources produce
+the published document and the reference pages. Reproducing "the
+professional structure of the ratified v1.0 document" is precisely what that
+toolchain exists for; Markdown plus a homegrown templating layer is the
+harder road to the same place.
+
+- [x] **Convert the narrative — done (2026-08-12): `spec/ife_spec.md` removed;
+      `spec/ife_spec.adoc` pulls each generated fragment via Asciidoctor
+      `include::`.** Headings, lists, tables, and normative
+      shall/should/may prose. Replace
+      each `{{...}}` anchor with an `include::` of the corresponding
+      generated file. Nothing about the *content* changes in this step — it
+      is a format conversion, reviewed as one.
+- [x] **Re-target the doc emitter — done (2026-08-12): one `.adoc` per item
+      (`layout/<BLOCK>.adoc`, `constants/<GROUP>.adoc`, `provenance.adoc`),
+      registered in `generator/pipeline.py::_render`; `generated_docs/`
+      regenerates them and `--check` covers them.** `generator/emit/docs.py` currently
+      writes a single `generated_docs/layout_tables.md`. AsciiDoc includes
+      work best fine-grained, as Vulkan's do: emit **one file per item** —
+      per block layout, per enumeration, per shared structure — so the
+      narrative includes exactly what it needs where it needs it, and a
+      moved section does not drag unrelated tables with it. Register the
+      new outputs in `generator/pipeline.py::_render`; `--check` then covers
+      them automatically.
+- [x] **Assembly — done (2026-08-12): `spec/build_document.sh` renders HTML
+      and PDF from the one source (`ife_spec.adoc` + `generated_docs/**`),
+      with "no preprocessor here and no hand-written layout content" — the
+      exit criterion, verbatim.** `asciidoctor-pdf` for the published document,
+      `asciidoctor` for HTML, from the same source. Carry the document
+      furniture the ratified v1.0 has — contents, revision history, numbered
+      sections, figure references — as AsciiDoc attributes rather than
+      hand-maintained text.
+- [x] **Record provenance in the document itself — done (2026-08-12):
+      `emit_provenance` writes the schema version and the generator version
+      that produced the build into `generated_docs/provenance.adoc`, which
+      the narrative includes.** The published PDF states
+      the spec version *and the generator version that produced it*. A
+      ratified document that cannot be reproduced years later is not
+      reproducible in any useful sense — and the generator is now part of the
+      standard, not merely a build tool.
+- [x] **CI docs build — done (2026-08-12): the `spec documents and drift` job
+      runs `--validate` + `--check`, and the `specification document` job
+      renders `build_document.sh` (HTML + PDF) and uploads the artifact, so a
+      schema change that breaks the document fails before merge.** A schema
+      change that breaks the document fails
+      before merge; draft watermark until ratification.
+
+**Exit (met 2026-08-12):** one command (`spec/build_document.sh`) produces the
+complete draft PDF and HTML from
+`ife_spec.adoc` + the JSON, with zero hand-written layout content and no
+custom preprocessor in the pipeline.
+
+## Phase 6 — Ecosystem cutover & release
+
+- [x] **Conformance corpus — infrastructure and harness built (R-1/R-2,
+      2026-08-18/19).** The corpus reaches 18 of 18 block types. Live
+      plan in [§Conformance corpus](#conformance-corpus--live-plan) below.
+      The published
+      [Iris-Example-Files](https://github.com/IrisDigitalPathology/Iris-Example-Files)
+      do not serve: both are the same specimen with entirely empty metadata and
+      reach 6 of 18 block types, so building on them would narrow real-byte
+      coverage rather than replace it. Purpose-built `.test_slide` fixtures,
+      hosted rather than committed, pinned by digest in a committed manifest.
+
+      **Standing.** The delivery half is live:
+      `tests/corpus/manifest.json` pins the hosted fixtures by SHA-256,
+      `tools/fetch_corpus.py` fetches them at configure into `.deps/corpus/`,
+      and CI caches by manifest digest. `tests/ife_corpus_tests.cpp` walks each
+      fixture with `generate_file_map` and `recover_file_structure` and
+      compares reached against declared in both directions — the manifest
+      cannot claim coverage the walk did not observe. The corpus reaches 18 of
+      18 block types across the `v1_0_witness`, `v1_1_witness` and
+      `cipher_iris` fixtures; four other tests consume the fetched bytes as a
+      fixture as well.
+- [x] **Iris-Codec coordinated update — done (2026-08-18):** the primary
+      consumer builds against the generated API, boundary unchanged (structure
+      here, compression/API there). The consumer-facing namespace question
+      (below) resolved to a *generated* `IFE::Serialization`, and
+      Iris-Codec's encoder is migrated onto it: `src/IrisCodecEncoder.cpp`
+      takes it with `using namespace Serialization`, reached through the
+      umbrella include at `src/IrisCodecPriv.hpp:47`. Committed and pushed on
+      Iris-Codec `main` (`2f2c158` "Update encoder for generated IFE headers",
+      `009858c` "Carry attributes as AttributeSizeEntry, and resolve IFE per
+      owner"); the tree is clean and in sync with its origin.
+
+      The `downstream` CI job is committed (`.github/workflows/ci.yml`): it
+      clones Iris-Codec and redirects its FetchContent fetch at this checkout
+      via `FETCHCONTENT_SOURCE_DIR_IRISFILEEXTENSION`, so a change here that
+      breaks the ecosystem fails on this repository's own CI. Green on `main`
+      at `c3ab440`.
+
+      One thing to know when auditing this: the encoder takes the namespace
+      wholesale, so its call sites are unqualified and a grep for
+      `Serialization::` in Iris-Codec returns **zero**. That reads like the
+      cutover never happened. It did — grep `using namespace Serialization`.
+- [ ] **Python bindings (pybind11) over the abstraction layer.** Not a scope
+      question: modularity is decided by where the boundary is drawn, not by
+      how many languages cross it. This repository owns the byte structure and
+      its validation, and a Python caller manipulating that structure is
+      squarely inside it. The two binding sets are complementary rather than
+      duplicative — Iris-Codec's expose high-performance decode and encode;
+      these expose the low-level byte manipulation Iris-Codec deliberately
+      hides.
+
+      C++ remains the preferred language for an encoder or decoder, but that is
+      a preference and not a constraint the format imposes: someone writing an
+      encoder in Python is a legitimate consumer, and the specification is
+      machine-readable precisely so that implementations need not all look
+      alike.
+
+      **Bind the `Abstraction::` methods** — `is_iris_codec_file`,
+      `validate_file_structure`, `abstract_file_structure`,
+      `generate_file_map`, `recover_file_structure`, and the `Abstraction::`
+      structs. Each entry point takes a single `const FileAccessInfo&`
+      (mapped pointer + size — the Vulkan-shaped info struct), bound as one
+      Python object. That is the same surface the C++ shared library exports,
+      so the binding and the linked library present one API in two languages
+      rather than two APIs.
+
+      **This costs the C++ ABI nothing**, which is worth stating because it
+      looks like it should. The export decision keeps `IFE::blocks` out of the
+      shared library and makes `IFE_HEADER_ONLY` the supported route to it — and
+      a pybind11 module is exactly such a consumer: it compiles the block layer
+      into its own extension module. Binding low-level access therefore widens
+      the exported surface by zero symbols, and the extension can reach as deep
+      as it needs to.
+
+      Ship it behind its own CMake option so a C++-only consumer never builds
+      it, generate the enum values and field keys from `spec/*.json` rather than
+      restating them, and add a CI job — a binding that is not built is a
+      binding that is broken.
+
+- [ ] **JS/WASM binding surface** — as above, and note the residency work is
+      already done: `IFE::Window`'s Emscripten branch fetches byte ranges on
+      demand, so a WASM consumer has a working transport before any binding
+      exists.
+- [x] **Legacy retirement — done (2026-08-12):** `src/IrisCodecExtension.*`
+      deleted from `main` (Phase 6 execution plan, tasks 6.1–6.7); README and
+      docs rewritten around the generated tables; the oracle reads the hosted
+      digest-pinned snapshot instead of the retired writers.
+- [ ] **Release** with the generated spec document as the published
+      standard; ratification per Iris Developers process.
+
+**Exit:** downstream builds green on the generated layer (**met**); v1 code no
+longer on `main` (**met**); spec document published from the pipeline
+(outstanding — no tag has been cut on this repository, and there are no
+GitHub releases on either remote).
+
+**Phase 6 in one line (2026-08-18):** the cutover is finished and the
+ecosystem is green; what is left is the corpus harness, two binding surfaces,
+and the release.
+
+### High-priority lift — shared Virtual Memory Arena — DONE
+
+**Done (2026-08-12).** `Iris::MemoryArena` is upstream on Iris-Headers main
+(`68d6812`) as `priv/IrisMemory.hpp` + `src/IrisMemory.cpp` (extracted from
+FastFHIR's MPL-2.0 `FF_Memory`, relicensed MIT). IFE compiles the `.cpp`,
+`SparseFile` maps through the arena, the `NOT WIN32` gate is gone (64-bit
+only), and the `.deps` fetch is back on `origin/main`. Verified: 13/13 ctest,
+"4.00 GiB file, 28 KiB actually allocated". `IFE_Window` needed no migration
+(it never maps a file). Design record: Iris-Headers `NOTES_FROM_IFE.md` §7.
+
+**Windows branch — closed (audited 2026-08-18).** It is no longer uncompiled:
+`IrisMemory.cpp` is compiled into the library, the `tests` matrix carries a
+`windows-latest`/MSVC leg that builds it and runs the full `ctest`, and
+`ife_large_file_tests` is gated on pointer width rather than platform, so the
+sparse-file path executes there too. Green on `main`.
+
+**Record.** The topology rationale (Iris-Headers `priv/`, not Iris-Codec),
+the extract-don't-copy scope, and the MPL-2.0→MIT license note are preserved
+in Iris-Headers `NOTES_FROM_IFE.md` §7 and in the headers of
+`IrisMemory.{hpp,cpp}`.
+
+### Resolved — `METADATA_FREE_TEXT` and the I2S claim
+
+v1 defines `METADATA_FREE_TEXT` as an alias of `METADATA_I2S`; both are 1. The
+schema assigns it 3, recorded as an errata on the member, because two
+conformance claims sharing a value cannot be told apart — and `--validate`
+rejects aliases outright, so the schema could not have kept v1's spelling even
+if it wanted to.
+
+The consequence needed a decision before release, and has one (below). A v1
+encoder that meant *free text* wrote 1, and a 1.1 reader reads 1 as
+`METADATA_I2S` — which since 1.1 is
+a claim that the attributes contain nothing identifying. No file is misparsed,
+but a v1 file may now assert a conformance property nobody checked, and it is
+precisely the property the schema says cannot be inferred from the keys
+present. Whether existing files can carry 1-as-free-text at all is a question
+about the corpus, not about the schema. `ife_wire_parity_tests` excludes this
+member with a pointer here; the exclusion is deliberate and should not be
+"fixed".
+
+#### Ryan's response — the resolution
+You can tell free-text from I2S because free text should have a version number
+of zero while I2S will carry a version number. It's in the original spec.
+The idea is that non-versioned I2S is by definition just free text as it
+has no specification to adhere to.
+
+**Shipped.** The disambiguation is normative text in the published document
+(§2.3.5 Attributes, the paragraph beginning "IFE 1.0 gave METADATA_FREE_TEXT
+the same value") and an errata on the member in `spec/ife_constants.json`.
+Nothing further is owed before release.
+
+---
+
+### Resolved — the consumer-facing namespace: `Serialization::` vs the generated three-way split
+
+The owner's concern (carried in the session handoff): the generated layer's
+three-way namespace split — `IFE::blocks` / `IFE::constants` / `IFE::vtables`
+— may have been an unnecessary distinction, and the retired hand-written
+`Serialization::` namespace may have been the better system for the consumer
+that actually codes against it. This is the analysis that decides how the
+Iris-Codec encoder cutover (the red `downstream` gate) is done.
+
+**What `Serialization::` exposed.** One flat namespace under `IrisCodec`,
+re-exporting `Iris` and `Abstraction`; 16 `DATA_BLOCK`-derived block structs,
+their `*CreateInfo` payload structs, a `SIZE_*`/`STORE_*` free-function write
+API per block, the `Offsets`/`RECOVERY`/`TYPE_SIZES` enums and the
+`NULL_OFFSET` sentinel — all 139 symbols `IFE_EXPORT`ed.
+
+**What the generated layer exposes instead.** Three namespaces, one per
+generated file, one per schema data-kind: `IFE::constants` (enums,
+sentinels), `IFE::vtables` (derived per-block and per-primitive offset/size
+tables, version-annotated), `IFE::blocks` (typed handles, the
+`Status`/`Check` validation vocabulary, `*CreateInfo` structs, and
+`store()`/`size_of()` for all 18 blocks). The block layer carries no export
+marking — hidden in a shared build by design (decision D, §4.1); a consumer
+reaches it via `IFE_HEADER_ONLY` or by compiling `IFE_Blocks.cpp` into its
+own target.
+
+**Measured, from primary sources:**
+
+- The encoder's usage is **write-side, entirely**: the 24 `Serialization::`
+  references in `src/IrisCodecEncoder.cpp` are 13 `STORE_*`, 6 `SIZE_*`,
+  4 `X::HEADER_SIZE` and 1 `*CreateInfo` construction; the 9 bare
+  `NULL_OFFSET` come from `using namespace`. The encoder never names a block
+  handle or a vtable — the read-side half of the three-way split is not what
+  the consumer exercises.
+- Every retired name has a generated analogue, field for field: `SIZE_X` →
+  `size_of`, `STORE_X` → `store` (same `CreateInfo` payloads plus a defaulted
+  `ValidationHooks*` parameter), `X::HEADER_SIZE` →
+  `::IFE::vtables::X::header_size` (with `header_size_v1_0` alongside),
+  `NULL_OFFSET` → `::IFE::constants::NULL_OFFSET`. The one non-mechanical
+  step: some retired stores took semantic payloads directly
+  (`STORE_ICC_COLOR_PROFILE(__base, off, vector<BYTE>)`) while generated
+  stores always want a flat `CreateInfo`, so those call sites gain a
+  construction. The 1.1 additions (`CLINICAL_OFFSET`, `MICRONS_PLANE`) are
+  already in the generated `MetadataCreateInfo`; nothing hand-written can
+  know them.
+- The split is a **consequence of the generator, not an API design**: three
+  emitters (`emit_constants_header`, `emit_vtables_header`,
+  `emit_blocks_header`), three files, three namespaces — the C++ projection
+  of the three data kinds the JSON distinguishes. One semantic namespace
+  *is* expressible (the namespace lines are emitter output), but it would
+  merge ~2,000 lines of three dependency-ordered files under one name and
+  change every qualified reference and consumer include for zero functional
+  gain — and it would not change the export story, which is about symbol
+  visibility, not spelling.
+- A **compat layer** — a `Serialization`-style semantic namespace over the
+  generated layer — is the one route that is *not* free. It is a
+  hand-written second projection of the schema, exactly what Phase 6
+  deleted, and it cannot be purely mechanical: the bare-payload signatures
+  need hand-written payload→`CreateInfo` conversion, and appended fields stay
+  invisible until a human extends the wrapper. It would also keep the
+  retired symbol surface alive against decision D.
+
+**Options.** (a) Keep the three-way split and migrate Iris-Codec's encoder —
+one file, 33 sites, rename-plus-reshape, include fix at
+`src/IrisCodecPriv.hpp:47`. (b) Reintroduce a unified semantic namespace
+over the generated layer. (c) Hybrid — semantic aliases for the write path
+only.
+
+**Decision (2026-08-12): (b), but *generated*, not hand-written.** The
+owner's ruling, recorded verbatim: the reason for a unified
+`IFE::Serialization` is *not* past compatibility — it is that the
+three-way split is unintuitive, the prior API contract was simple, and "the
+API should make it foolproof". A hand-written compat layer was tried and
+rejected on the spot: a hand-maintained CreateInfo struct cannot carry
+changes to the specification — "additional fields may be added to
+AssociatedImage in the future (the JSON spec) but this will be stuck and
+we'll have to remember. It's a bad design."
+
+**What was built instead.** The generator now emits a fourth file,
+`generated_source/IFE_Serialization.hpp`, a pure re-export of the whole
+write surface under one `IFE::Serialization` namespace: block
+handles, `*CreateInfo` payloads, entry structs, `store()`/`size_of()`,
+the enumerations, and the sentinels (`NULL_OFFSET`, `MAGIC_BYTES`, ...).
+It is a projection of the schema, so a field appended to the JSON appears
+here on the next run — the drift problem that killed the hand-written layer
+cannot exist. Two deliberate scoping calls:
+
+- `FILE_HEADER`'s `EXTENSION_MAJOR/MINOR` default to the schema version in
+  the generated CreateInfo (`_writer_default`), because the generated
+  `store()` always lays out the newest fields: the self-consistent claim
+  becomes the zero-effort one, and a writer that needs an older claim has
+  to set the fields explicitly — the moment to think about what layout that
+  claim implies.
+- The `image_orientations` value group is *not* re-exported: its members
+  duplicate the Iris-Headers `ImageOrientation` enum a consumer already has
+  (same names, different types — half-precision bits there, decoded floats
+  here), and exporting both would make identical-looking names mean
+  different things.
+
+**The block layer declares in the header and defines in a translation unit —
+corrected 2026-08-18.** The consolidation commit (`5f29b20`) did two separable
+things and only one was wanted: merging three headers into one
+`IFE_Blocks.hpp` (wanted), and inlining every definition into it so the `.cpp`
+stopped being emitted (not wanted). The second is reversed. The emitter emits
+`IFE_Blocks.hpp` (constants, derived vtables, handles, declarations, the
+`IFE::Serialization` re-export) and `IFE_Blocks.cpp` (the definitions),
+and `IFE_HEADER_ONLY` is load-bearing again: defining it makes the header
+`#include "IFE_Blocks.cpp"` at the bottom of itself, and an
+`IFE_BLOCKS_LINKAGE` macro marks the definitions `inline` in that mode and
+nothing in the other — folded into many translation units they must be inline,
+compiled once they must not be. A consumer therefore chooses: link the
+compiled layer, or take it whole from an include.
+
+The export decision is untouched and was re-verified after the split: zero
+`IFE::` symbols in the shared library's dynamic table, and
+`tests/exported_symbols.cmake` still passes. Reversing it also restored what
+`ife_blocks_header_only_tests` is for — while everything was inline, that
+target compiled the identical translation unit as `ife_blocks_tests` with a
+define that did nothing, so two of the eleven ctest entries were the same
+build.
+
+Two things the split surfaced that inlining had hidden. Bazel's
+`:ife_validation` deliberately does not depend on `:ife` — the conformance
+layer ships separately and must not drag the runtime in — so with the
+definitions no longer in the header it had nothing to link; both now depend on
+a shared `:ife_blocks`. And the big-endian job's hand-written `g++` lines
+compile the `.cpp` again. CMake needed no change: it globs
+`generated_source/*.cpp`.
+
+**One generated header — the owner's ruling, applied.** The generated
+C++ layer is now a single `IFE_Blocks.hpp`: constants, derived vtables,
+the block handles with their inline definitions, and the
+`IFE::Serialization` consumer namespace all in one file. The
+three-way namespace split inside is kept — it is the generator's structure
+(one data kind per namespace) — but the file split was pure consumer cost,
+and the install is down from 9 headers to 6. The schema's `primitives`
+base classes are folded into the blocks themselves: a generated header may
+duplicate freely (the JSON is the single source of truth, not the C++), so
+the `primitives::` indirection and the base-class explanation disappear
+from the consumer's view. Consumers still include exactly one name
+(`IrisFileExtension.hpp`), and the append-only invariant and
+"schema stays weak" rule are untouched — this changed only how the C++ is
+packaged, not what the schema drives. The file is ordered for reading, per
+the owner: the writers' payloads and entry points (the `*CreateInfo`
+structs, `ValidationHooks`, `store()`/`size_of()` declarations) come first
+inside `IFE::blocks`, and each block's derived vtable is emitted beside its
+struct rather than in one separate table wall. The final step folded the
+tables into the structs themselves: `IFE::vtables` is gone, each block now
+carries its `offset`/`size` tables and version markers as nested members
+(the retired hand-written layer kept the same tables inside each struct as
+enums), and the primitives' shared tables duplicate per block — generated
+duplication, like the accessors, so the JSON remains the single source.
+The array blocks' `*CreateInfo` payloads went the same way: from C-style
+`(const Entry* entries, uint32_t count)` to an immutable
+`const std::vector<Entry>& entries` — the caller hands over its vector,
+`store()`/`size_of()` read `entries.size()`, and the `.data()`/`.count`
+noise at call sites is gone. Byte blobs keep `(const BYTE*, Size)`: their
+payloads are strings and opaque runs, and copying them into a vector would
+be worse. Attributes go one step further: `ATTRIBUTE_SIZES` and
+`ATTRIBUTE_BYTES` share one semantic payload —
+`const std::vector<std::pair<std::string, std::string>>& entries` — and
+the generated writers derive both the sizes array and the packed byte run
+from it, so the slicing cannot drift from the bytes it describes (the
+retired layer's `STORE_ATTRIBUTES_SIZES`/`STORE_ATTRIBUTES_BYTES` took the
+same semantic `Attributes`). The pairing is declared in the schema
+(`"from_pairs": true` on the two blocks) so the generator derives it
+rather than hard-coding block names.
+
+**⚠⚠⚠ THE ATTRIBUTE WIRE IS BEING RESHAPED — DECISION (2026-08-12, owner, pre-consumer window).** Attribute values become **tagged**: a `KIND` byte in the `ATTRIBUTE_SIZE` entry (KEY_SIZE, VALUE_SIZE, KIND) says whether the value is a plain string (`0`) or an **offset to a complete nested attribute structure** (`1`) — its own sizes+bytes laid out recursively, so DICOM sequences (and any tree) are representable natively instead of flattened-by-convention. This is a **reshape, not an addition** — it changes what the value bytes mean — and it is being done now because the format is pre-ratification and effectively unused: the oracle fixtures on `iris.exampleslides.org` are regenerated by the new writer as part of the change, and append-only binds the *result*, not the process of defining it. Design shape fixed at decision time:
+- **A byte, not a bit** — `0` = string, `1` = offset; room for future kinds without another wire break.
+- **The offset target is a complete nested attribute structure** — well-formed by construction, recursed with a depth bound and the existing `VisitPath` / `MAX_BLOCK_DEPTH` cycle machinery.
+- **Claims stay orthogonal to structure** — `METADATA_I2S` / `METADATA_DICOM` keep describing the key *vocabulary*; `KIND` describes the value's *structure*; one attributes block can mix strings and nested offsets, which is exactly a DICOM sequence tree.
+- **The rebuilt format is born as its real 1.0** — spec document, oracle, and encoder regenerate together as one coherent act.
+Status: **DECIDED — NOT YET IMPLEMENTED.** The generator, spec JSON, oracle, Iris-Codec encoder, and this document's other records update together in the implementation pass. This paragraph is the loud announcement; the historical flat contract below it is superseded.
+
+**⚠ SUPERSEDED BY THE DECISION ABOVE — the flat contract this paragraph records described the format as shipped; it is being reshaped.** The attribute index (`ATTRIBUTE_SIZES`' `KEY_SIZE`/`VALUE_SIZE` entry + the packed `ATTRIBUTE_BYTES` run) is a flat key→value slice store, and that is the format's shipped 1.0 contract — not an omission this migration can repair, and not a regression: the retired layer's `Attributes` was equally flat (`std::map<std::string, std::u8string>`), and the pinned oracle fixtures prove the flat wire. The `METADATA_DICOM` claim is "DICOM PS3.3 tag-value pairs (32-bit tags, UTF-8 values per NEMA character-set requirements), carried without restriction" — "without restriction" constrains the *vocabulary* (any DICOM tag may be carried), not the *structure* (nested sequences are not represented). DICOM's tree is flattened at the consumer boundary — `IrisCodecDcmBridge.cpp` descends nested sequences and emits flat pairs, the standard DICOM→flat-store interop pattern, with the key encoding the path (`0040,A730[0]/0008,0100` or the leaf tag). The pairs payload (`std::vector<std::pair<std::string, std::string>>`) carries those flat path-keys unchanged; nothing in the API blocks DICOM. The format cannot grow nesting in place — the index is shipped 1.0 and append-only forbids reshaping it — and the "schema stays weak" rule forbids adding a tree vocabulary to describe how one consumer serializes its structures. **The honest residual, stated plainly:** if a future consumer needs the DICOM tree *structure itself* preserved rather than its flattened leaf pairs, the flat format cannot hold it. The additive escape hatch is a future appended block, deliberately gated behind a real consumer need — it must never change the shipped 1.0 blocks.
+
+
+**Public headers moved to `include/` (same session).** A dry-run install
+found the installed package could not compile a consumer: `IFE_Export.hpp`
+was missing from the FILE_SET export list (every public header includes it),
+and nothing caught it — the public surface was invisible inside `src/`. The
+hand-written public headers (`IrisFileExtension.hpp`, `IFE_Runtime.hpp`,
+`IFE_Bytes.hpp`, `IFE_Window.hpp`) now live in `include/`; `src/` holds only
+implementation. The install surface is the `include/` FILE_SET plus the
+generated layer minus `IFE_Validation.hpp` (a dev tool that ships only with
+the validation library) and minus `IFE_Window.hpp` (Emscripten-only — the
+WASM remote windowed fetch — and the installed package is native), verified
+by compiling a find_package consumer against the installed tree. Generated
+headers stay in `generated_source/` — the generator owns them — so the
+public surface is two directories, both on the FILE_SET base-dir list.
+
+Two further install-surface fixes from the same dry run: `IFE_Export.hpp`
+was folded into `IFE_Runtime.hpp` and deleted — its original reason (one
+definition shared by the retired hand-written layer and the generated one)
+died with the cutover, since the generated layer never exports and
+`IFE_Runtime.hpp` is the only header with exported symbols. And IFE's
+install no longer drags Iris-Headers' whole package (IrisCore.hpp,
+IrisCodecCore.hpp, IrisHeadersConfig.cmake — downstream runtime/codec
+concerns): the exported targets do not link the IrisHeaders target, and the
+two headers the public surface actually includes (`IrisTypes.hpp`,
+`IrisCodecTypes.hpp`) install with IFE's own FILE_SET.
+The installed package is
+verified end-to-end by a `find_package(IrisFileExtension)` consumer that
+compiles and runs against it; that verification also fixed the config
+destination (`cmake/IrisFileExtension`, matching the package name), the
+missing `INSTALL_INTERFACE` include dirs on the shared/static targets, and
+the header-only route's need for `IFE_Blocks.cpp` alongside the headers —
+the installed form of decision D, since the block layer is deliberately
+unexported and `IFE_HEADER_ONLY` folds that `.cpp` into the header.
+
+**Verified first in a scratch workspace, then shipped.** The
+`IFE::Serialization` namespace round-trips all 18 block kinds through
+the generated readers (417-byte synthetic slide, deep validation green), and
+Iris-Codec's encoder — 24 `Serialization::` refs + bare `NULL_OFFSET` — moved
+to the generated API in one file. The migration was exactly the bounded
+one-file reshape the earlier analysis priced: the semantic payloads
+(`Layers`, `Attributes`, `Extent::layers`) flatten into the generated entry
+arrays at the call sites, the include fix is `IrisCodecPriv.hpp:47`, and
+`using namespace Serialization;` inside `namespace IFE` restores the
+bare sentinels.
+
+**Landed (2026-08-18).** Both sides are committed and pushed, and the
+`downstream` job is green on `main` at `c3ab440` — the codec dependencies
+(jpeg-turbo, AVIF, highway, libpng) are installed by the job itself, copied
+from Iris-Codec's own CI recipe. See the Phase 6 checklist item above.
+
+---
+
+### Phase 6 execution plan — retire `src/IrisCodecExtension.*` (2026-08-12)
+
+Written to the flash-execution standard, inline for the same reason Phase 4's
+is: it is the phase in front of us. **This is the task list.** Complements
+[§Conformance corpus](#conformance-corpus--live-plan) below, which
+covers fixture *content*; this section covers the *cutover*. Where they
+disagree, this section is newer.
+
+**Status: complete (2026-08-12).** All tasks 6.1–6.7 landed and verified:
+6.1 and 6.2 take both generated files to 100% function coverage (0/181 and
+0/15 unexecuted); 6.3/6.4 generated and pinned the two hosted fixtures
+(digests in `tests/corpus/manifest.json`, fetched at configure by
+`tools/fetch_corpus.py`); 6.5 rewired the oracle, runtime and >4 GiB tests
+onto the fetched snapshot and deleted the writers and examples; 6.6 flipped
+the library; 6.7 deleted the hand-written layer (the in-scope grep is empty).
+11/11 ctest green in Release and ASan+UBSan; `--check` and the portability
+lint clean. Two findings from the run: the generated `TILE_PIXEL_DATA` store
+wrote the stream offset where the 40-bit self-reference must equal its own
+position (off-by-5, fixed in `generator/emit/cpp.py`, regenerated) — the
+walk test was its first execution; and v1's `METADATA_FREE_TEXT` alias stores
+byte 1, which reads back as `METADATA_I2S` under the schema's distinct value
+(the oracle asserts the byte; the errata is recorded in the spec).
+
+**Reviewed 2026-08-12 against the measured data** (coverage re-derived from
+the merged profile; the 2,857 B fixture regenerated and digested): the
+36-function split is 26 harness + 10 fixture gaps, not 24/12; the parity-freeze
+task was cut (it dies with v1); the blocked section was corrected (Iris-Headers
+PR #1 has merged). **Policy (2026-08-12): no binary blobs in the repo** — the
+snapshot and tile-offsets files are hosted on `iris.exampleslides.org` and
+digest-pinned in the committed `tests/corpus/manifest.json`. Each change is
+marked inline.
+
+**Goal:** delete `src/IrisCodecExtension.hpp` and `src/IrisCodecExtension.cpp`
+without losing what they prove.
+
+**Near-term milestone (2026-08-12):** host the v1 coverage slide —
+`iris.exampleslides.org/spec-validation/v1_snapshot.test_slide`, 2,857 B, 13 of 18 blocks,
+digest `658ead7c…` (task 6.3) — then delete v1 and the tests that generate
+bytes with it. The hosted corpus grows from there as coverage and versions
+change.
+
+#### Read first
+
+1. [§Conformance corpus](#conformance-corpus--live-plan) — the whole section.
+2. `tests/ife_v1_oracle_tests.cpp` — its preamble states why an oracle exists.
+3. `tests/ife_wire_parity_tests.cpp` — its preamble states why it is temporary.
+4. `src/IFE_Window.hpp` lines 1–30 — residency, and what it is not.
+
+#### The idea that unblocks this
+
+**The oracle's value is in the bytes, not the code.** v1's writers were only
+ever a way to *produce* bytes a shipped encoder wrote. Once produced, those
+bytes are permanent evidence. Freeze them as committed fixtures and the oracle
+survives v1's deletion.
+
+The whole v1 fixture is **2,857 bytes** and exercises 13 of 18 block types.
+
+⚠ This does **not** replace the corpus. A snapshot cannot generate bytes for a
+case nobody froze. It decouples *deleting v1* from *encoding a corpus*, which
+is the only reason it exists.
+
+#### Measured dependency map (2026-08-12 — do not re-derive)
+
+Exactly six real `#include`s of `IrisCodecExtension.hpp`; everything else is a
+comment mention.
+
+| Where | Kind |
+|---|---|
+| `src/IrisCodecExtension.cpp` | itself |
+| `include/IrisFileExtension.hpp` | **public umbrella** — what Iris-Codec includes |
+| `tests/ife_wire_parity_tests.cpp` | offsets + enum values vs v1 |
+| `tests/ife_v1_oracle_tests.cpp` | v1 writes → generated reads |
+| `tests/ife_v1_fixture.cpp` | writes the shared fixture |
+| `tests/ife_large_file_tests.cpp` | writes the >4 GiB slide |
+
+Targets linking `IrisFileExtensionLib` for v1's `STORE_*`:
+`ife_v1_slide_writer`, `ife_example_v1`, `ife_v1_oracle_tests`,
+`ife_large_file_tests`.
+
+#### Measured coverage baseline (2026-08-12 — do not re-derive)
+
+| File | Regions | Functions | Lines | Branches |
+|---|---|---|---|---|
+| `generated_source/IFE_Blocks.cpp` | 71.9% | 85.1% (27/181 unexecuted) | 75.3% | 52.7% |
+| `generated_source/IFE_Validation.cpp` | 29.1% | 40.0% (9/15) | 33.3% | 21.8% |
+| `src/IFE_Runtime.cpp` | 74.5% | 100% | 79.0% | 67.5% |
+| `src/IFE_Bytes.hpp` | 88.3% | 85.7% | 97.7% | 71.9% |
+
+**Post-implementation (2026-08-12, same command):** `IFE_Blocks.cpp` 0/181 and
+`IFE_Validation.cpp` 0/15 functions unexecuted — 100% — because 6.1 and 6.2
+cover what the baseline analysis called unreachable: the generated writers
+make TILE_PIXEL_DATA and CLINICAL_METADATA constructible, so even the "10
+fixture gaps" execute.
+
+Reproduce with:
+
+```bash
+cmake -S . -B build-cov -G Ninja -DIFE_BUILD_TESTS=ON -DIFE_RUN_GENERATOR=ON -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fprofile-instr-generate -fcoverage-mapping" -DCMAKE_EXE_LINKER_FLAGS="-fprofile-instr-generate" && cmake --build build-cov -j && rm -rf /tmp/prof && mkdir -p /tmp/prof && LLVM_PROFILE_FILE="/tmp/prof/%p.profraw" ctest --test-dir build-cov && xcrun llvm-profdata merge -sparse /tmp/prof/*.profraw -o /tmp/prof/all.profdata && xcrun llvm-cov report $(ls build-cov/tests/ife_* | while read b; do [ -x "$b" ] && printf -- "-object %s " "$b"; done) -instr-profile=/tmp/prof/all.profdata
+```
+
+⚠ In zsh an unquoted `$VAR` does **not** word-split. The `$(...)` above must be
+inlined exactly as written; assigning it to a variable first breaks `llvm-cov`.
+
+**36 unexecuted functions split into two kinds that need different fixes**
+(counts corrected 2026-08-12 review — re-derived from the merged profile; the
+earlier 24/12 split double-counted `FILE_HEADER`'s no-arg overload and
+miscounted the conformance layer. Totals are unchanged: 27 + 9 = 36):
+
+* **26 are harness gaps — no fixture file can ever cover them.** 17 are the
+  no-arg `validate_deep()` overloads that never execute. All 18 blocks have
+  one; `FILE_HEADER`'s is called by `IFE_Runtime::validate_file_structure`
+  (`versioned_root` → `header.validate_deep()`), the other 17 are not, because
+  traversal uses `validate_deep(VisitPath&)`. The remaining 9 are the
+  conformance layer: `check_FILE_HEADER`, `check_ATTRIBUTES`, `check_IMAGES`,
+  `check_ANNOTATIONS`, `check_CLINICAL_METADATA`, and the `is_member`
+  predicates for `ImageEncodings`, `AnnotationTypes`, `MetadataFormats`,
+  `ClinicalEncodings` (5 checks + 4 predicates; `check_TILE_TABLE`,
+  `check_LAYER_EXTENTS`, and the `TileEncodings`/`PixelFormats` predicates are
+  already executed by `ife_validation_tests`).
+* **10 are fixture-content gaps** — the same five blocks
+  §Conformance corpus lists: `CLINICAL_METADATA` (its `VisitPath&`
+  `validate_deep`, `validate`, `entries_begin`, `encoding`, `bytes`), framed
+  `TILE_PIXEL_DATA` (`VisitPath&` `validate_deep`, plus `store` and `size_of`
+  for both blocks), `CIPHER`, `ANNOTATION_GROUP_SIZES`,
+  `ANNOTATION_GROUP_BYTES`. The last three contribute only their no-arg
+  `validate_deep` — their other functions are exercised in-memory by
+  `ife_blocks_tests`/`ife_validation_tests` without a fixture.
+
+#### Tasks, in order
+
+**6.1 — Attach the conformance layer in tests.** *No fixture needed.*
+Edit `tests/ife_validation_tests.cpp`. The hooks are **already installed** —
+`attached()` copies `b::conformance_layer()`, and hook-attached `store()`
+tests cover `LAYER_EXTENTS` (range, ordering, conformant pass), `TILE_TABLE`
+(enum membership), `CIPHER` (null-hook proof), plus a custom tracing hook.
+Hooks attach to `store(..., &hooks)`, **not** to `validate_deep` — that takes
+only `VisitPath&` — so re-running a fixture "through `validate_deep` with them
+attached" is impossible and not what the layer is for. What remains:
+hook-attached `store()` cases for the five blocks whose checks never run —
+`FILE_HEADER`, `ATTRIBUTES`, `IMAGES`, `ANNOTATIONS`, `CLINICAL_METADATA` —
+each with a conformant input and one deliberately invalid value so both
+branches execute. `FILE_HEADER` has no enum predicate: its two branches are
+`TILE_TABLE_OFFSET` and `METADATA_OFFSET` equal to `NULL_OFFSET`.
+**Done when:** `IFE_Validation.cpp` function coverage ≥ 90% by the command
+above (covering these 9 takes it to 100%), and `ctest` is green.
+
+**6.2 — Call the 17 unexecuted no-arg `validate_deep()` entry points.** *No
+fixture needed.* Add one test to `tests/ife_blocks_tests.cpp` that walks the
+existing in-test fixture and calls `validate_deep()` (no argument) on every
+block handle it can reach. Assert each returns success. (`FILE_HEADER`'s no-arg
+form is already executed by `IFE_Runtime::validate_file_structure` — all 18
+overloads exist and all are public API.)
+**Done when:** `IFE_Blocks.cpp` function coverage ≥ 94% — the 17 overloads
+take it to 171/181 = 94.5%, and ≥ 95% is unreachable without the 10
+fixture-gap functions, so do not chase it — and `ctest` is green.
+⚠ Do not delete the no-arg overloads instead. They are public API.
+
+**6.3 — Snapshot the v1 fixture; host it — no binary blobs are committed.**
+Run it with the output path — the writer takes a required argument and exits 2
+without one: `build/tests/ife_v1_slide_writer tests/fixtures/v1_snapshot.test_slide`.
+`tests/fixtures/` is gitignored scratch and stays that way: upload the file to
+`iris.exampleslides.org` (Cloudflare R2, registered 2026-08-12) and record it
+in `tests/corpus/manifest.json` (committed, text — URL, 2,857 B, SHA-256, IFE
+version, blocks covered), the corpus Delivery mechanism (§Conformance corpus). The snapshot is the corpus's first hosted fixture,
+so the oracle and the corpus share one fetch path. Implement the fetch now:
+CMake downloads `manifest.json`'s files into the gitignored `.deps/corpus/`
+and verifies each digest before any test runs — unconditional, like the
+existing IrisHeaders `FetchContent` (the `ife_corpus_tests` target and the
+`-DIFE_CORPUS=OFF` opt-out come later with the rest of the corpus).
+**Done when:** the file is uploaded, `manifest.json` is committed with the
+matching digest, a fresh configure fetches and verifies it, and `ctest` is
+green. Known-good reference from the 2026-08-12 review run:
+`658ead7c395c62c9eec8d3251a720b4e00553b9bf218aed9d4134791edd76fa0` — any
+other digest means the encoder changed, which is exactly what this task exists
+to notice.
+⚠ Generate it **before** any task below changes v1. The upload and fetch must
+be live before 6.5 rewires the oracle onto the fetched file.
+
+**6.4 — Snapshot the full-width tile-offsets array.** `ife_v1_oracle_tests.cpp`
+`test_v1_packed_widths_at_full_width` writes a bare `TILE_OFFSETS` array with
+every byte of `u40`/`u24` significant. Persist that buffer once, upload as
+`iris.exampleslides.org/v1_tile_offsets_full_width.bin`, and record it in
+`tests/corpus/manifest.json` alongside the 6.3 snapshot — same fetch, same
+digest rule.
+**Done when:** uploaded and `manifest.json` committed with the matching
+digest; a new test reads the fetched file and reproduces the existing
+assertions on `OFFSET_FULL`, `SIZE_FULL`, `OFFSET_MID`, `SIZE_MID`.
+
+**Removed on review (2026-08-12): "Freeze the parity wall" was task 6.5.**
+It dies with v1 instead. The wall's own preamble declares it "deliberately
+temporary… dies with `src/IrisCodecExtension.*`", and a frozen copy of the 147
+assertions would have no reference to verify against — the v1 side is deleted
+in the same phase, so any transcription error becomes a permanent, silent,
+enshrined error. The byte guarantee survives without it: 6.3 and 6.4 pin the
+fixture and the full-width offsets by digest in the committed manifest, the
+oracle proves the generated readers over v1 bytes, and a schema edit that
+moves a shipped field breaks reading the digest-verified file. The enum values
+absent from the fixture (AVIF/PNG encodings, `ORIENTATION` variants, remaining
+`RECOVERY` codes) are corpus work — see §Conformance corpus. If a
+compile-time wall is wanted later, generate its literals mechanically from v1
+headers before deletion; never hand-type them.
+
+**6.5 — Rewire the v1-dependent tests onto the fetched snapshot.**
+`ife_v1_oracle_tests`, `ife_v1_fixture`, and `ife_large_file_tests` must read
+`.deps/corpus/v1_snapshot.test_slide` — fetched and digest-verified by 6.3's
+machinery — instead of calling `STORE_*` (the rewire lives in
+`ife_v1_fixture.cpp`'s `build_slide`; `ife_v1_fixture.hpp` includes nothing of
+v1, so the boundary is one file). For `ife_large_file_tests`, write the
+structural blocks by copying the snapshot's bytes into the sparse arena at the
+same offsets and rewriting only `FILE_SIZE` and the two tile-offset entries.
+The oracle's liveness now depends on the hosting being up; CI's `.deps/corpus/`
+cache keyed by manifest digest keeps the normal path off the network.
+**Done when:** no test includes `IrisCodecExtension.hpp`; `ctest` green in both
+Release and ASan+UBSan.
+⚠ `ife_example_parity` and `ife_example_v1` die here — they exist to compare v1
+against the runtime. Delete both targets and `tests/example_parity.cmake`, and
+sweep the `ife_example_v1` references from CMakeLists' FOLDER/export/install
+lists — 6.7's grep covers only `IrisCodecExtension`. `ife_v1_slide_writer` has
+no purpose once 6.3's digest is recorded — delete it too rather than rewiring
+it to copy bytes.
+
+**6.6 — Flip the library.** In `CMakeLists.txt`, remove
+`${IFE_SOURCE_DIR}/IrisCodecExtension.cpp` from `IFE_SourcesPriv` and move
+`IFE_RuntimeSources` into it. In `src/IrisFileExtension.hpp`, change
+`#include "IrisCodecExtension.hpp"` to `#include "IFE_Runtime.hpp"`.
+**Done when:** `ctest` green; `tests/exported_symbols.cmake` still passes.
+⚠ Iris-Codec pins IFE at `origin/main` and includes `IrisFileExtension.hpp`.
+This lands on *their* next build, not a schedule we choose.
+
+**6.7 — Delete.** `git rm src/IrisCodecExtension.hpp src/IrisCodecExtension.cpp`
+and remove every remaining reference (comments included).
+**Done when:** `grep -rn IrisCodecExtension src tests examples CMakeLists.txt`
+returns nothing; full gate run green.
+
+#### Gate run — use this exact form, every time
+
+```bash
+cmake . -B build && cmake --build build --config Release -j && ctest --test-dir build -C Release --output-on-failure && python3 -m generator --check && python3 tools/portability_lint.py
+```
+
+#### Traps that have already cost this project time
+
+* **`ctest` reports PASS from stale binaries after a failed build.** Chain build
+  and test with `&&` as above. This produced a false green twice in one session,
+  most recently on 2026-08-12.
+* **After changing `spec/*.json` or an emitter, run `cmake .`, not just
+  `cmake --build`.** The 200.0 gating fixture is generated at configure time.
+* **`python3 -m generator` followed by a build in the same second leaves a
+  stale binary, silently.** Make compares mtimes at one-second resolution, so a
+  regenerated `IFE_Blocks.hpp` whose timestamp equals the last link time is not
+  seen as newer and the translation unit is not recompiled — no error, no
+  warning, and tests that report the *previous* generator's behaviour. Observed
+  2026-08-17 during a red-green pass: the header on disk had the guard, the
+  binary did not, and two tests failed against source that was already correct.
+  This is the same class as the stale-binary trap above and has the same fix:
+  `touch generated_source/*.hpp` after regenerating, or verify anything
+  surprising in a fresh build directory before believing it.
+* **Never construct a block handle over v1-written bytes with
+  `b::VERSION_WRITTEN`.** It claims 1.1 for a file v1 stamps 1.0. Read
+  major/minor from the file and construct with those, as
+  `IFE_Runtime::versioned_root` does. Getting this wrong makes
+  `TILE_SIZE` return the neighbouring block's `VALIDATION` word rather than
+  reporting absent, with no error.
+* **Run `python3 tools/portability_lint.py` before pushing.** MSVC is the first
+  place Windows defects appear and no Windows container runs on macOS.
+
+#### Blocked on work outside this repository
+
+* **Iris-Headers PR #1** (`Iris::MemoryArena`) — **merged** as `68d6812`
+  ("Merge pull request #1 from ryanlandvater/feat/iris-memory-arena") on
+  IrisDigitalPathology/Iris-Headers main — the repo `CMakeLists.txt` fetches;
+  the `.deps` fetch already carries it and the build is green (13/13 ctest).
+  The earlier "on neither remote / must merge" note was stale. Two residuals
+  remain: (a) ryanlandvater's *fork* main is still stale — `789a99c` is not an
+  ancestor of `origin/main` — so anything checking out the fork fails; (b) the
+  arena's Windows branch is written but has never been compiled (per the PR).
+  `-DFETCHCONTENT_SOURCE_DIR_IRISHEADERS=<path>` covers co-development and CI
+  with nothing needed from the consumer and is verified to work.
+* **The five fixture-content blocks** need an encoder that can write them.
+  `CIPHER` and the annotation groups need encoder *features* that do not exist.
+  Host the resulting `.test_slide` files on `iris.exampleslides.org`
+  (Cloudflare R2, registered 2026-08-12) and pin them by SHA-256 in
+  `tests/corpus/manifest.json`; see §Conformance corpus Delivery.
+* ⚠ **Do not block 6.1–6.7 on the five-block corpus.** The snapshot is
+  generated, uploaded and fetched by 6.3 — before anything touches v1 — so the
+  cutover depends only on the two hosted snapshot files and the fetch
+  machinery, not on the corpus's remaining fixture work.
+
+### Conformance corpus — live plan
+
+> **This section is the original plan and is kept for its reasoning. For the
+> corpus as it now stands, read R-1 and R-2 above, and
+> `tests/corpus/README.md`.** What changed: the corpus is one frozen witness
+> per IFE version plus a `CIPHER` variant, it reaches **18 of 18** block types,
+> and `v1_snapshot.test_slide` was renamed `v1_0_witness.test_slide`
+> (2026-08-19) — references to the old name below are historical.
+
+The corpus exists to replace what `ife_v1_oracle_tests` proves: that the
+new stack reads bytes **a shipped encoder wrote**, rather than agreeing with
+another description of the format. Two fixtures are live (MIGRATION 6.3/6.4):
+`v1_snapshot.test_slide` (13 of 18 block types) and
+`v1_tile_offsets_full_width.bin`. The remaining five blocks are the reason
+this section exists.
+
+#### Why the published example files are not enough
+
+Measured against `Iris-Example-Files@main`, both files (`425248_JPEG.iris`,
+`425248_AVIF.iris`) are the same specimen and structurally identical: IFE 1.0
+revision 0, 1,718,162,733 / 1,123,383,971 B, 4 layers, 183,134 dense tile
+entries, 1,465,252 B structural bytes, and `ATTRIBUTES`/`IMAGES`/
+`ICC_PROFILE`/`ANNOTATIONS` all NULL. They exercise 6 of 18 block types; a
+corpus built from them would reduce real-byte coverage rather than replace
+it. Fixtures are therefore purpose-built `.test_slide` files, **small by
+construction** — a valid pyramid (8×6 tiles at layer 0 plus two further
+layers) is under 5 MB with real JPEG tiles.
+
+#### What the fixtures must contain
+
+Every block must appear at least once across the set. Blocks marked ⚠ appear
+in no currently published file; they are the reason this work exists.
+Annotations are unblocked (seven v1 writer/reader defects fixed in
+`62eaeeb`; the first masked the rest — see that commit).
+
+| Block | How it is made to appear |
+|---|---|
+| `FILE_HEADER`, `TILE_TABLE`, `LAYER_EXTENTS`, `TILE_OFFSETS`, `TILE_PIXEL_DATA` | any slide |
+| `METADATA` | always present; `MICRONS_PIXEL`/`MAGNIFICATION` non-zero ⚠ |
+| `ATTRIBUTES`, `ATTRIBUTE_SIZES`, `ATTRIBUTE_BYTES` ⚠ | ≥1 attribute pair; one fixture per meaningful `metadata_formats` (`METADATA_I2S`, `METADATA_DICOM`) |
+| `IMAGES`, `IMAGE_BYTES` ⚠ | ≥2 associated images differing in `ENCODING` and `ORIENTATION` |
+| `ICC_PROFILE` ⚠ | any embedded profile |
+| `ANNOTATIONS`, `ANNOTATION_BYTES` | ≥1 of each `annotation_types` value — PNG, JPEG, SVG, TEXT (unblocked) |
+| `ANNOTATION_GROUP_SIZES`, `ANNOTATION_GROUP_BYTES` | ≥1 named group — **unblocked** (verified 2026-08-18): the "no group writer" note meant v1's writer, deleted in Phase 6. `AnnotationGroupSizesCreateInfo`/`AnnotationGroupBytesCreateInfo` exist and are used by `IFE_Blocks.cpp`. See R-2.1 |
+| `CIPHER` ⚠ | one encrypted fixture, if the encoder can write one; otherwise record as permanently uncovered |
+| `CLINICAL_METADATA` ⚠ | 1.1 only — one fixture per `clinical_encodings` value the encoder supports |
+
+#### Edge cases worth encoding deliberately
+
+* **`u40` tile offsets above 4 GB — covered, no fixture requirement.**
+  `ife_large_file_tests` validates a whole slide over 4 GiB (sparse: 4.00 GiB
+  long, 28 KiB allocated). POSIX/64-bit only; NTFS needs `FSCTL_SET_SPARSE`.
+* **`NULL_TILE` slots** — both published files are dense; a sparse layer is
+  the only thing that exercises the sentinel.
+* **A non-zero `FILE_REVISION`** — so the field is not confirmed only at 0.
+* **Tile encodings other than JPEG** — `TILE_ENCODING_AVIF` never appears in
+  committed bytes; reader and conformance membership are covered in-process
+  (MIGRATION 6.1/6.2 tests). A fixture with real AVIF-encoded tiles — the
+  published specimen's bytes or the pipeline's first AVIF output — belongs in
+  the corpus as it grows.
+* **Both byte orders** are unnecessary — IFE is little-endian at every
+  version; the s390x job covers the reader.
+* **1.1 features**: `Z_PLANES` > 1, a non-256 `TILE_SIZE`, `MICRONS_PLANE`,
+  and a tile frame carrying the optional 11-byte trailer.
+
+#### Delivery
+
+**Host the files; commit only a manifest.** `iris.exampleslides.org`
+(Cloudflare R2, registered 2026-08-12) is the host; the two snapshot files
+are the first fixtures on it. `tests/corpus/manifest.json` (committed, text)
+records per fixture: URL, byte size, SHA-256, IFE version, and the block
+types it covers. CMake fetches into the gitignored `.deps/corpus/` and
+verifies the digest before any test runs — the digest is what makes a hosted
+corpus reproducible.
+
+The corpus is a **living set**: fixtures are added as coverage grows (the
+five deferred blocks) and as new IFE versions land, each recorded with the
+version it proves. **The corpus test must fail loudly when the corpus is
+unreachable, not skip.** Provide `-DIFE_CORPUS=OFF` as the explicit opt-out —
+it disables only the corpus test target, never the snapshot fetch, which the
+oracle depends on. Cache by manifest digest in CI so the normal path never
+touches the host.
+
+**Loud-failure requirement — already satisfied (verified 2026-08-18).** Every
+path that needs a byte of the corpus fails hard when it cannot get one:
+`tools/fetch_corpus.py` exits non-zero on an unreachable URL, a byte-count
+disagreement, or a digest that has drifted; CMake turns that into
+`message(FATAL_ERROR)` at configure (`tests/tests.cmake`); and Bazel's
+`//tests/corpus:corpus` genrule fails the build. A manifest change busts the
+CI cache key, so CI does a real fetch exactly when the manifest names
+something new. Nothing skips, and no additional gate is needed.
+
+The residual — a cached CI run cannot observe the host — is by design and
+costs nothing, because that run needs no byte from it. A scheduled liveness
+check was built for this on 2026-08-18 and removed the same day: the incident
+that prompted it was local DNS interception on a developer machine, not an
+outage (the host served correctly throughout), so the check would have been
+green through the whole thing.
+
+**Cloudflare gotcha (2026-08-12):** the zone's bot protection (error 1010)
+blocks the default `Python-urllib` user agent; `tools/fetch_corpus.py` sends
+`ife-corpus-fetch/1.0` instead. If the host changes, keep that.
+
+#### Harness
+
+`tests/ife_corpus_tests.cpp`, one target, iterating the manifest:
+
+1. `IFE::Window::resident` over the fetched file (small enough to map whole).
+2. `validate_file_structure` must succeed.
+3. Walk every `points_to` edge; confirm each block's recovery tag and
+   self-validating `VALIDATION` word.
+4. Assert the manifest's declared coverage was actually observed — a fixture
+   that stops containing annotations must fail, not quietly narrow the gate.
+5. Record which of the 18 block types the corpus reached; fail if a block the
+   manifest claims is absent.
+
+Step 4 keeps this honest: without it the corpus degrades silently, exactly as
+`ANNOTATION_JPEG` did.
+
+#### Where oracle coverage stands
+
+Counted from what the snapshot contains: **14 of the 18 block types**
+(corrected 2026-08-18 by R-1's harness, which found `TILE_PIXEL_DATA`
+present and undeclared — see the R-1 status block)
+(`FILE_HEADER`, `TILE_TABLE`, `LAYER_EXTENTS`, `TILE_OFFSETS`, `METADATA`,
+`ATTRIBUTES`, `ATTRIBUTE_SIZES`, `ATTRIBUTE_BYTES`, `IMAGES`, `IMAGE_BYTES`,
+`ICC_PROFILE`, `ANNOTATIONS`, `ANNOTATION_BYTES`, `TILE_PIXEL_DATA`). The
+remaining four — `CIPHER`, `ANNOTATION_GROUP_SIZES`,
+`ANNOTATION_GROUP_BYTES`, `CLINICAL_METADATA` — are the ⚠ rows above, plus
+the *framed* tile variant (`TILE_FRAME`), a prefix rather than one of the 18
+blocks, unreached either way.
+
+**Exit:** every block type reached by at least one fixture — full real-byte
+coverage. Deleting v1 was not blocked on this; the corpus is the path to the
+five blocks no snapshot contains.
+
+## Refinement workflow
+
+Before any phase is implemented:
+
+1. A refinement pass expands that phase into `plans/phase-N-<name>.md`: a
+   granular, self-contained checklist (file-level tasks, acceptance criteria
+   per item, test commands) executable by flash-class models without
+   additional context. (Phase 4's is inline in this document instead — the
+   standard is the same: *Read first* list, exact signatures, *Done when*
+   command, ⚠ on anything requiring judgement.)
+2. Decisions discovered mid-phase are appended to `spec/DESIGN.md`, never
+   left implicit in code.
+3. This document tracks only phase-level status; granular progress lives in
+   the per-phase plans.
+
+## Superseded plans
+
+Two earlier plans are superseded: the original six-phase "FastFHIR substrate
+port" (which buried codegen behind engine work) and the interim
+"v1-parity-first" plan (which froze the wire format and required
+byte-for-byte parity with the hand-written v1 enums). The schema-driven decision was originally taken to
+make parity gating obsolete — but decision 4.0-G reinstates it: real files
+exist, the format is frozen at shipped 1.0, and **byte-for-byte parity with
+the hand-written layer is the primary quality gate** (enforced by 4.0-H's
+`static_assert` wall), alongside round-trip soundness and recoverability.
+What the schema-driven approach still buys is that the layout is *derived*
+rather than transcribed — parity is checked, not hand-maintained. What survives from both: the
+JSON-as-single-source principle, the dependency-free stdlib-only generator
+writing `generated_source/`, version-aware generated tables, and the
+`IFE_Memory` substrate — whose adopt-or-delete decision (4.0-F) resolved to
+deletion, relocating the 'how' to Iris-Codec and leaving the 'what' here.
