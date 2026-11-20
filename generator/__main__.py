@@ -8,6 +8,11 @@ The CLI contract here is final: CMake's configure-time generation
 (IFE_RUN_GENERATOR, or auto when generated_source/ lacks its anchor file)
 invokes exactly this command line. Do not change flags without updating
 CMakeLists.txt and generator/README.md in the same change.
+
+-d/--directory names the directory the three relative paths resolve against,
+so a caller outside the repository root (another repository's build, an IDE)
+names the root instead of changing into it. Optional, defaulting to the
+current directory, so CMake's invocation is unchanged.
 """
 import argparse
 import sys
@@ -20,6 +25,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m generator",
         description="Generate the IFE C++ serialization layer and derived layout tables.",
+    )
+    parser.add_argument(
+        "-d", "--directory",
+        default=".",
+        help="Directory the relative --schema-dir, --out-dir and --docs-dir resolve against "
+             "(default: the current directory). Absolute paths are used as given",
     )
     parser.add_argument(
         "--schema-dir",
@@ -51,10 +62,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    # Joining onto the directory leaves an absolute path as it is.
+    root = Path(args.directory)
     return pipeline.run(
-        schema_dir=Path(args.schema_dir),
-        out_dir=Path(args.out_dir),
-        docs_dir=Path(args.docs_dir),
+        schema_dir=root / args.schema_dir,
+        out_dir=root / args.out_dir,
+        docs_dir=root / args.docs_dir,
         check=args.check,
         validate_only=args.validate,
     )

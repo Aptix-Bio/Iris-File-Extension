@@ -18,7 +18,8 @@ mkdir -p "$out"
 
 # The generated half must be current, or the document renders a stale layout.
 # Cheap, deterministic, and the same command CI runs.
-python3 -m generator --docs-dir "$root/generated_docs" >/dev/null
+# -d and PYTHONPATH name the root, so this works from any working directory.
+PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" python3 -m generator -d "$root" --docs-dir "$root/generated_docs" >/dev/null
 
 command -v asciidoctor >/dev/null || {
     echo "asciidoctor not found." >&2

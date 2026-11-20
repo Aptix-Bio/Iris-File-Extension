@@ -19,3 +19,14 @@ table:
 # A caption above each table, as the published document has.
 caption:
   align: left
+
+# Aptix Bio's mark at the foot of every page, centred between the page
+# numbers the default theme puts at the outer edges. The image path resolves
+# against this file's directory, so the SVG sits beside it in spec/.
+footer:
+  recto:
+    center:
+      content: image:aptix-logo.svg[pdfwidth=0.85in]
+  verso:
+    center:
+      content: image:aptix-logo.svg[pdfwidth=0.85in]

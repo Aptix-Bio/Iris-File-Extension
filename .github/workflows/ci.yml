@@ -58,6 +58,8 @@ jobs:
         run: PYTHONHASHSEED=0 python3 tests/generator/test_determinism.py
       - name: Generator determinism (seed 1)
         run: PYTHONHASHSEED=1 python3 tests/generator/test_determinism.py
+      - name: Generator -d resolves paths against the named directory
+        run: python3 tests/generator/test_directory_flag.py
       # Runs here rather than in the MSVC job so a Windows-only defect fails
       # in twenty seconds on Linux instead of after a full matrix build. It
       # replaces none of that job; it just gets there first.

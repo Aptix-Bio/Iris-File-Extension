@@ -51,6 +51,7 @@ the JSON is versioned append-only.
 
 | Flag | Default | Meaning |
 |------|---------|---------|
+| `-d`, `--directory` | `.` | Directory the relative `--schema-dir`, `--out-dir` and `--docs-dir` resolve against, so the generator runs from outside the repository root (with `PYTHONPATH` naming it). Absolute paths are used as given |
 | `--schema-dir` | `spec/` | Directory holding `ife_header.json` + `ife_fields.json` + `ife_constants.json` |
 | `--out-dir` | `generated_source/` | Where generated C++ is written |
 | `--docs-dir` | `generated_docs/` | Where generated documentation is written |
@@ -58,7 +59,10 @@ the JSON is versioned append-only.
 | `--check` | — | Fail (exit 1) if any generated file's banner witness hash mismatches the current spec (parity, not byte-equality) or the committed witness is stale |
 
 CMakeLists.txt invokes exactly this interface at configure time; changing
-flags requires updating CMakeLists.txt in the same change.
+flags requires updating CMakeLists.txt in the same change. `-d` is optional
+and defaults to the current directory, so CMake's invocation, which sets
+`WORKING_DIRECTORY` to the root, is unchanged by it.
+`tests/generator/test_directory_flag.py` checks it.
 
 ## Module map
 
