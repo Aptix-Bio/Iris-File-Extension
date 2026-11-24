@@ -135,3 +135,53 @@ decision is that workflows stay simple and streamlined. Labels from
       locally and in CI).
 - [ ] CI-1.5 Record in `development/WBS.md` and `development/RTM.md` once those
       files are committed (they exist only as untracked files on 2026-11-24).
+
+---
+
+## CI-2 — The big-endian job runs on Blacksmith without Docker (owes its green run)
+
+**Filed 2026-11-24.** After the move to Blacksmith (CI-1), the `big-endian (s390x)`
+job failed in 22 seconds (run 45440640914, job 138610470770) before compiling
+anything.
+
+**Cause.** `docker/setup-qemu-action` ran `tonistiigi/binfmt --install s390x`,
+which reported `installing: s390x OK` with `linux/s390x` supported. The same
+action's platform listing a moment later showed only `linux/amd64` and
+`linux/386`, and `docker run --platform linux/s390x alpine` then failed with
+`exec /bin/sh: exec format error`: the kernel had no binfmt_misc handler for
+s390x ELF files when the container started, so the registration did not hold on
+the runner VM. Blacksmith runs each Linux job in a Firecracker microVM
+([runner overview](https://docs.blacksmith.sh/blacksmith-runners/overview), read
+2026-11-24). Its documentation says nothing about QEMU or binfmt_misc, and for
+multi-platform Docker builds it recommends one native runner per architecture in
+place of emulation
+([Docker builds](https://docs.blacksmith.sh/blacksmith-caching/docker-builds),
+read 2026-11-24). Why the registration is lost inside the VM is therefore not
+documented; the log shows that it is.
+
+**Fix.** The job no longer uses Docker or binfmt_misc. The host installs the
+s390x cross compiler and QEMU user mode with apt (`g++-s390x-linux-gnu`,
+`qemu-user`), and `cmake --workflow --preset big-endian` does the rest:
+`cmake/toolchains/s390x-linux-gnu.cmake` sets the cross compilers and
+`CMAKE_CROSSCOMPILING_EMULATOR` to `qemu-s390x -L /usr/s390x-linux-gnu`, so ctest
+calls the emulator directly for every test binary. Generation and the corpus
+fetch run at configure on the host. The whole suite runs emulated (26 tests),
+which covers the bytes, blocks and window suites and the v1 oracle against the
+corpus; a label filter was not needed because the emulated suite takes about
+20 seconds. The compiler runs natively, which also retires the inline
+workarounds for include paths that failed to resolve when the compiler itself
+ran under QEMU. Actions in the job are pinned by commit SHA.
+
+- [x] CI-2.1 **The binaries are big-endian.** `ife_host_byte_order_tests`
+      (enabled by `IFE_HOST_BYTE_ORDER=big` in the preset) checks
+      `std::endian::native` and the in-memory layout of a stored `uint32_t`.
+      Evidence (Ubuntu 24.04 arm64 container on an Apple Silicon host,
+      CMake 3.28.3, 2026-11-24): the test binary is an ELF with
+      `EI_DATA=2` (big-endian) and `e_machine=22` (S390); emulated it prints
+      `compiled for big; memory layout big` and exits 0; the same source compiled
+      natively prints `compiled for little; memory layout little` and exits 1.
+- [x] CI-2.2 **Local green.** The preset passes 26 of 26 tests in that container.
+      The container host is arm64 where the runner is x86-64, and the container
+      starts from `ubuntu:24.04` instead of Blacksmith's image, so the apt
+      install and the job itself are proved only by the CI run.
+- [ ] CI-2.3 **VERIFY:** `big-endian (s390x)` green on PR #1.

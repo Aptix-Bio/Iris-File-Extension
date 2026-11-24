@@ -27,6 +27,23 @@ if(IFE_BUILD_TESTS)
     target_link_libraries(ife_bytes_tests PRIVATE ${IFE_Dependencies})
     add_test(NAME ife_bytes_tests COMMAND ife_bytes_tests)
 
+    # The byte order the suite must run under, asserted by a test so that a
+    # cross build cannot pass on the wrong host. The big-endian preset sets
+    # it to "big": without the test, a native compiler or a missing emulator
+    # leaves that job green on a little-endian host.
+    set(IFE_HOST_BYTE_ORDER "" CACHE STRING
+        "Byte order the tests must execute under (big, little, or empty for no check)")
+    if(IFE_HOST_BYTE_ORDER)
+        add_executable(
+            ife_host_byte_order_tests
+            ${PROJECT_SOURCE_DIR}/tests/ife_host_byte_order_tests.cpp
+        )
+        target_compile_features(ife_host_byte_order_tests PRIVATE cxx_std_20)
+        add_test(NAME ife_host_byte_order_tests
+                 COMMAND ife_host_byte_order_tests ${IFE_HOST_BYTE_ORDER})
+        set_target_properties(ife_host_byte_order_tests PROPERTIES FOLDER "Tests")
+    endif()
+
     # Generated block handles: reading and validation executed against a real
     # byte buffer, which compiling the header cannot tell you.
     add_executable(

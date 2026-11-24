@@ -306,64 +306,24 @@ jobs:
     name: big-endian (s390x)
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 30
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v4.2.0
-        with:
-          platforms: s390x
-
-      # Native configure first: it fetches Iris-Headers into .deps/ and renders
-      # generated_source/, so the emulated container only has to compile. Doing
-      # the fetch and the generation under emulation would cost minutes for no
-      # extra coverage -- neither step is architecture dependent.
-      - name: Fetch dependencies and generate (native)
-        run: cmake -B build -DIFE_BUILD_TESTS=ON -DIFE_RUN_GENERATOR=ON
-
-      # The three suites that touch bytes. The parity wall was a compile-time
-      # comparison against the shipped constants and died with the hand-written
-      # layer; the oracle is the byte-level gate and runs here.
-      #
-      # The oracle earns its place here twice over: it reads bytes the shipped
-      # encoder wrote, on a host whose byte order is the opposite of every
-      # machine either was developed on. The corpus fetch runs in the native
-      # configure above, so the container only compiles and reads.
-      - name: Compile and run on s390x
-        run: |
-          docker run --rm --platform linux/s390x -v "$PWD":/repo -w /repo alpine:latest sh -c '
-            set -e
-            apk add --no-cache g++ >/dev/null
-            echo "arch: $(uname -m)"
-            # Include resolution on this emulated host, established by the
-            # 31fbbf6 diagnostics: absolute -I /repo/... fails to open the same
-            # file that relative -I include opens (qemu-user path quirk), so
-            # the paths below are relative -- the container CWD is /repo by
-            # construction. Word-splitting of $INC is verified working.
-            echo "--- IFE_Bytes.hpp:"; ls -la /repo/include/IFE_Bytes.hpp 2>&1
-            INC="-I include -I src -I .deps/irisheaders-src/include -I .deps/irisheaders-src/priv -I generated_source"
-            BLK="generated_source/IFE_Blocks.cpp"
-            # Bisect: the last compile that worked (8f2b46d) was a single-TU
-            # invocation; every failure since has had $BLK on the line. A vs B
-            # isolates whether the second TU is the trigger.
-            echo "--- A: one TU (8f2b46d shape):"
-            g++ -std=c++20 -O2 $INC -o /tmp/a tests/ife_bytes_tests.cpp && echo A_OK || echo A_FAIL
-            echo "--- B: two TUs (failing shape):"
-            g++ -std=c++20 -O2 $INC -o /tmp/b tests/ife_bytes_tests.cpp $BLK && echo B_OK || echo B_FAIL
-            # The real builds, one TU per compile then a link: multi-TU
-            # invocations have failed to resolve -I includes on this host, and
-            # -c + link does not depend on the mechanism.
-            g++ -std=c++20 -O2 $INC -c tests/ife_bytes_tests.cpp -o /tmp/bytes_tu.o
-            g++ -std=c++20 -O2 $INC -c $BLK -o /tmp/blk_tu.o
-            g++ -std=c++20 -O2 /tmp/bytes_tu.o /tmp/blk_tu.o -o /tmp/bytes
-            g++ -std=c++20 -O2 $INC -c tests/ife_blocks_tests.cpp -o /tmp/blocks_tu.o
-            g++ -std=c++20 -O2 /tmp/blocks_tu.o /tmp/blk_tu.o -o /tmp/blocks
-            g++ -std=c++20 -O2 $INC -c tests/ife_window_tests.cpp -o /tmp/window_tu.o
-            g++ -std=c++20 -O2 $INC -c src/IFE_Window.cpp -o /tmp/window_src.o
-            g++ -std=c++20 -O2 /tmp/window_tu.o /tmp/window_src.o -o /tmp/window
-            g++ -std=c++20 -O2 $INC -I tests -c tests/ife_v1_oracle_tests.cpp -o /tmp/oracle_tu.o
-            g++ -std=c++20 -O2 $INC -I tests -c tests/ife_v1_fixture.cpp -o /tmp/fixture_tu.o
-            g++ -std=c++20 -O2 /tmp/oracle_tu.o /tmp/fixture_tu.o /tmp/blk_tu.o -o /tmp/oracle
-            /tmp/bytes
-            /tmp/blocks
-            /tmp/window
-            /tmp/oracle /repo/.deps/corpus
-          '
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A cross compiler and user-mode QEMU on the host, with no container:
+      # cmake/toolchains/s390x-linux-gnu.cmake names qemu-s390x as the
+      # CMAKE_CROSSCOMPILING_EMULATOR, so ctest calls the emulator directly
+      # and nothing depends on a binfmt_misc registration. The registration
+      # docker/setup-qemu-action made did not hold on Blacksmith's runner VMs
+      # and every s390x container failed with "exec format error" (TASKS.md,
+      # CI-2). Generation and the corpus fetch run at configure on the host;
+      # only the test binaries are emulated.
+      - name: Install the s390x cross compiler and QEMU user mode
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends g++-s390x-linux-gnu qemu-user ninja-build
+      # The whole ctest suite under emulation, including the three suites that
+      # touch bytes (bytes, blocks, window) and the v1 oracle, which reads
+      # bytes the shipped encoder wrote on a host whose byte order is the
+      # opposite of every machine either was developed on.
+      # ife_host_byte_order_tests fails unless the binaries execute big-endian.
+      - name: Configure, build and test on s390x
+        run: cmake --workflow --preset big-endian
