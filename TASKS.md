@@ -138,7 +138,7 @@ decision is that workflows stay simple and streamlined. Labels from
 
 ---
 
-## CI-2 — The big-endian job runs on Blacksmith without Docker (owes its green run)
+## CI-2 — The big-endian job runs on Blacksmith without Docker (done; downstream owes a green run)
 
 **Filed 2026-11-24.** After the move to Blacksmith (CI-1), the `big-endian (s390x)`
 job failed in 22 seconds (run 45440640914, job 138610470770) before compiling
@@ -184,4 +184,11 @@ ran under QEMU. Actions in the job are pinned by commit SHA.
       The container host is arm64 where the runner is x86-64, and the container
       starts from `ubuntu:24.04` instead of Blacksmith's image, so the apt
       install and the job itself are proved only by the CI run.
-- [ ] CI-2.3 **VERIFY:** `big-endian (s390x)` green on PR #1.
+- [x] CI-2.3 **VERIFY:** `big-endian (s390x)` green on PR #1 (run 45447197501,
+      job 138634119321: 26 of 26 tests under emulation; the job took 2 min 46 s).
+- [ ] CI-2.4 **Downstream.** The same run failed `Iris-Slide builds against this
+      branch` at configure with "Could not find nasm": Iris-Slide merged its
+      vcpkg build (Iris-Slide cc17fb3) between run 45440640914 and this one, and
+      vcpkg's aom port needs NASM from the host. The job's apt line now adds
+      `nasm` and `pkg-config`, the tools Iris-Slide's own `_build.yml` installs.
+      Owes its green run.

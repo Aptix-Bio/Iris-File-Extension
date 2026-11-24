@@ -204,7 +204,11 @@ jobs:
       # (the CMakeLists.txt probe catches missing and empty ones) fall back
       # to the upstream org.
       # Build-only, matching Iris-Slide's own CI (which runs no ctest). The
-      # apt + jpeg-turbo recipe is copied from that CI verbatim.
+      # apt + jpeg-turbo recipe is copied from that CI verbatim. Iris-Slide's
+      # configure installs its dependencies through vcpkg since 2026-11-24
+      # (Iris-Slide cc17fb3), and nasm (for the aom port) and pkg-config are
+      # the system tools its .github/workflows/_build.yml installs because
+      # vcpkg cannot fetch them on Blacksmith's Linux runners.
       - name: Check out Iris-Slide beside this repository
         shell: bash
         run: |
@@ -224,7 +228,7 @@ jobs:
           sudo wget https://raw.githubusercontent.com/libjpeg-turbo/repo/main/libjpeg-turbo.list -O /etc/apt/sources.list.d/libjpeg-turbo.list
           sudo apt update
       - name: Fetch Dependencies
-        run: sudo apt install libhwy-dev libjpeg-turbo-official libavif-dev libpng-dev zlib1g-dev openslide-tools python3-dev meson ninja-build -y
+        run: sudo apt install libhwy-dev libjpeg-turbo-official libavif-dev libpng-dev zlib1g-dev openslide-tools python3-dev meson ninja-build nasm pkg-config -y
       - name: Configure CMake
         run: >
           cmake -B build -S ../Iris-Slide
