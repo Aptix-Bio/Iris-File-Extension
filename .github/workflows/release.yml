@@ -18,6 +18,10 @@ name: Release
 # publish, and its gate reports instead of failing, so the packaging can be
 # proven while the specification is still draft.
 #
+# Runners: Blacksmith, at labels documented in
+# https://docs.blacksmith.sh/blacksmith-runners/overview (read 2026-11-24);
+# ci.yml gives the sizes (CI-1 in TASKS.md).
+#
 # ci.yml is deliberately not re-run here. That is the gate on the commit; this
 # is the gate on the release. A tag pointing at a commit CI never passed is a
 # tagging mistake, and rebuilding the suite here would find it late and slowly.
@@ -35,7 +39,8 @@ permissions:
 jobs:
   verify:
     name: tag and specification agree
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.guard.outputs.version }}
     steps:
@@ -60,6 +65,7 @@ jobs:
     name: ${{ matrix.name }}
     needs: verify
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -67,15 +73,23 @@ jobs:
           # Pinned to the oldest supported runner image rather than -latest: a
           # binary links the glibc it was built against and will not run on
           # anything older, so -latest silently narrows who can use the release
-          # every time GitHub moves the image.
-          - {name: linux-x86_64, os: ubuntu-22.04}
-          - {name: linux-arm64, os: ubuntu-22.04-arm}
+          # every time GitHub moves the image. Ubuntu 22.04 is Blacksmith's
+          # oldest, listed as deprecated: when it goes, the floor moves to a
+          # container build, since 24.04 would raise it from glibc 2.35 to 2.39.
+          - {name: linux-x86_64, os: blacksmith-2vcpu-ubuntu-2204, jobs: 2}
+          - {name: linux-arm64, os: blacksmith-2vcpu-ubuntu-2204-arm, jobs: 2}
           # One archive covering both Macs, because the alternative is asking
-          # users to know which of two downloads their machine takes.
-          - {name: macos-universal, os: macos-14, osx_archs: 'arm64;x86_64'}
-          - {name: windows-x64, os: windows-2022}
+          # users to know which of two downloads their machine takes. macOS 15
+          # is Blacksmith's oldest image; MACOSX_DEPLOYMENT_TARGET, which CMake
+          # reads into CMAKE_OSX_DEPLOYMENT_TARGET, keeps the floor at macOS
+          # 14, which the macos-14 image this replaced gave by default.
+          - {name: macos-universal, os: blacksmith-6vcpu-macos-15, jobs: 6, osx_archs: 'arm64;x86_64', osx_target: '14.0'}
+          # Windows Server 2025 is the only Windows image Blacksmith offers.
+          - {name: windows-x64, os: blacksmith-2vcpu-windows-2025, jobs: 2}
     env:
       PKG: IrisFileExtension-${{ needs.verify.outputs.version }}-${{ matrix.name }}
+      CMAKE_BUILD_PARALLEL_LEVEL: ${{ matrix.jobs }}
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.osx_target }}
     steps:
       - uses: actions/checkout@v7
 
@@ -94,7 +108,7 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DIFE_RUN_GENERATOR=ON "${extra[@]}"
 
       - name: Build
-        run: cmake --build build --config Release -j
+        run: cmake --build build --config Release
 
       # --config again: Visual Studio is a multi-config generator and installs
       # whichever configuration it is told to, ignoring CMAKE_BUILD_TYPE.
@@ -156,7 +170,8 @@ jobs:
   document:
     name: specification document
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: ruby/setup-ruby@v1
@@ -193,7 +208,8 @@ jobs:
     # branch has no tag to publish under.
     if: github.ref_type == 'tag'
     needs: [verify, package, document]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:

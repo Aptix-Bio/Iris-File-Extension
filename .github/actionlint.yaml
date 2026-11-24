@@ -1,0 +1,11 @@
+# The Blacksmith runner labels the workflows use, so actionlint checks them as
+# known labels instead of reporting them unknown (tools/runner_labels_lint.py
+# checks them against Blacksmith's documented set).
+self-hosted-runner:
+  labels:
+    - blacksmith-2vcpu-ubuntu-2404
+    - blacksmith-2vcpu-ubuntu-2204
+    - blacksmith-2vcpu-ubuntu-2204-arm
+    - blacksmith-2vcpu-windows-2025
+    - blacksmith-6vcpu-macos-15
+    - blacksmith-6vcpu-macos-26
