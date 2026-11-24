@@ -12,8 +12,10 @@
 [review]
 product = "Iris-File-Extension (IFE), the public specification of the Iris slide file format and the C++20 library generated from it that reads, writes, validates and recovers those files, MIT-licensed"
 # The rules the model reviews against, read whole from the default branch; a missing one fails the
-# review by name. TASKS.md and MIGRATION.md are IFE's work items and their ticks; architecture.md
-# and CLAUDE.md its layering and design notes; CONTRIBUTING.md the append-only wire contract;
+# review by name. TASKS.md holds IFE's current work items and their ticks. MIGRATION.md (about
+# 290,000 characters, two-thirds of the whole) is not sent: its ticks are still traced below, and
+# the diff shows the lines a pull request changes in it. architecture.md
+# and CLAUDE.md hold its layering and design notes; CONTRIBUTING.md the append-only wire contract;
 # spec/ the format itself, whose JSON documents are the single source of truth for the generated
 # code; generator/README.md and tests/wire/README.md the drift gate and its witness. IFE keeps no
 # errata file.
@@ -22,7 +24,6 @@ reference_files = [
     "development/ci_runners.md",
     "CONTRIBUTING.md",
     "TASKS.md",
-    "MIGRATION.md",
     "architecture.md",
     "CLAUDE.md",
     "spec/README.md",
