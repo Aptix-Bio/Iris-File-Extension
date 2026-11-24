@@ -95,9 +95,9 @@ Branch `feature/ReviewBot_CI-3`, pull request #6.
   ARCHITECTURE, WBS, RTM, PIPELINE and `analysis/`, every work-item ID kept,
   every reference updated, and the rubric's reference set and `[trace]`
   pointed at the new files [Process_01]
-  - [x] CI-3.6.1 **Nothing dropped.** The move's checker lists every work-item ID and every box of the three retired files at 005347e and finds each in `development/`: 107 work-item IDs, the 44 open ones in WBS.md; 37 open boxes, all in WBS.md; 79 ticked boxes, all in `development/`. A WBS copy with RB-5 deleted fails it, naming RB-5.
-  - [x] CI-3.6.2 **References and rubric.** `grep` finds the retired files named only in provenance notes and the dated records; the rubric sends 15 reference files (210,044 characters, from 446,068 with MIGRATION.md), and `[trace]` names WBS.md ticks and RTM.md rows; `cmake -P cmake/check_review_configuration.cmake` exits 0, and its new `[trace]` file check exits 1 on the base rubric with MIGRATION.md deleted, which the base check passed.
-  - [x] CI-3.6.3 **The pinned bot loads it.** `load_rubric` at the pinned governance commit: 13 items, `[trace]` on WBS.md and RTM.md, all 15 reference files present; the 14 Mermaid diagrams of `development/` render (mermaid-cli).
+  - [x] CI-3.6.1 **Nothing dropped.** The move's checker lists every work-item ID and every box of the three retired files at [005347e](https://github.com/Aptix-Bio/Iris-File-Extension/commit/005347ee3dd9ef802b967d795db17e564a7c8a27) and finds each in `development/`: 107 work-item IDs, the 44 open ones in WBS.md; 37 open boxes, all in WBS.md; 79 ticked boxes, all in `development/`. A WBS copy with RB-5 deleted fails it, naming RB-5. [47cd97c](https://github.com/Aptix-Bio/Iris-File-Extension/commit/47cd97c65c26e897e5ead97af2a6616e77cea05e)
+  - [x] CI-3.6.2 **References and rubric.** `grep` finds the retired files named only in provenance notes and the dated records; the rubric sends 15 reference files (211,205 characters, from 446,068 with MIGRATION.md), and `[trace]` names WBS.md ticks and RTM.md rows; `cmake -P cmake/check_review_configuration.cmake` exits 0, and its new `[trace]` file check exits 1 on the base rubric with MIGRATION.md deleted, which the base check passed. [47cd97c](https://github.com/Aptix-Bio/Iris-File-Extension/commit/47cd97c65c26e897e5ead97af2a6616e77cea05e)
+  - [x] CI-3.6.3 **The pinned bot loads it.** `load_rubric` at the pinned governance commit: 13 items, `[trace]` on WBS.md and RTM.md, all 15 reference files present; the 14 Mermaid diagrams of `development/` render (mermaid-cli). [47cd97c](https://github.com/Aptix-Bio/Iris-File-Extension/commit/47cd97c65c26e897e5ead97af2a6616e77cea05e)
   - [ ] CI-3.6.4 **VERIFY:** the maintainer reviews `development/`.
 
 ## CI-1 — Every CI job runs on a pinned Blacksmith runner `done`; VERIFY owed
@@ -106,7 +106,7 @@ Decided 2026-11-24 (D23): CI runs on Blacksmith runners, a label change kept
 minimal so the workflows stay simple. The label table and its sources are in
 [analysis/blacksmith_ci_and_review_bot_2026-11-24.md](analysis/blacksmith_ci_and_review_bot_2026-11-24.md).
 
-- [x] CI-1.1 **Red first.** `tools/runner_labels_lint.py` (run by the `spec` job) fails on a GitHub-hosted label, a label Blacksmith does not document, or a `-latest` label: 44 findings on the base `136dc1c`, exit 1; exit 0 after the move. [79a2fb7](https://github.com/Aptix-Bio/Iris-File-Extension/commit/79a2fb79a836a9b7e547aab3101786c2f90ed83d)
+- [x] CI-1.1 **Red first.** `tools/runner_labels_lint.py` (run by the `spec` job) fails on a GitHub-hosted label, a label Blacksmith does not document, or a `-latest` label: 44 findings on the base [136dc1c](https://github.com/Aptix-Bio/Iris-File-Extension/commit/136dc1ccb5e23e9f7554f2867786a4cb1c605ec8), exit 1; exit 0 after the move. [79a2fb7](https://github.com/Aptix-Bio/Iris-File-Extension/commit/79a2fb79a836a9b7e547aab3101786c2f90ed83d)
 - [x] CI-1.2 **Bounded.** Every job has `timeout-minutes`; `CMAKE_BUILD_PARALLEL_LEVEL` replaces the bare `-j` with the runner's vCPU count (2 on Linux and Windows, 6 on macOS). [79a2fb7](https://github.com/Aptix-Bio/Iris-File-Extension/commit/79a2fb79a836a9b7e547aab3101786c2f90ed83d)
 - [ ] CI-1.3 **VERIFY:** every job green on Blacksmith. First run (45429158071,
       2026-11-24): every job started on a Blacksmith runner; spec and document
@@ -119,7 +119,7 @@ minimal so the workflows stay simple. The label table and its sources are in
       the per-platform reusable workflow decided 2026-11-24 (unified
       workflows whose steps are CMake scripts, so a step runs the same
       locally and in CI).
-- [x] CI-1.5 Record in `development/WBS.md` and `development/RTM.md` once those files are committed: done by CI-3.6, where CI-1 is this section and RTM row Pipeline_01.
+- [x] CI-1.5 Record in `development/WBS.md` and `development/RTM.md` once those files are committed: done by CI-3.6, where CI-1 is this section and RTM row Pipeline_01. [47cd97c](https://github.com/Aptix-Bio/Iris-File-Extension/commit/47cd97c65c26e897e5ead97af2a6616e77cea05e)
 
 ## CI-2 — The big-endian job runs on Blacksmith without Docker `done`
 
