@@ -96,6 +96,13 @@ def main() -> int:
     for group in constants.values():
         if isinstance(group, dict) and isinstance(group.get("ife_version"), dict):
             group["ife_version"] = strip_newer(group["ife_version"])
+            # A retirement made after the baseline is not part of it: at 1.0
+            # the member was current (IMAGE_ENCODING_PNG, ANNOTATION_PNG).
+            for members in group["ife_version"].values():
+                for member in members.values():
+                    retired = member.get("deprecated") if isinstance(member, dict) else None
+                    if isinstance(retired, dict) and retired.get("version") != BASELINE:
+                        del member["deprecated"]
 
     header["version"] = {"major": 1, "minor": 0}
     header["revisions"] = [r for r in header.get("revisions", [])

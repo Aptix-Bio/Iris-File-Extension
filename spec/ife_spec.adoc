@@ -183,6 +183,10 @@ WSI:: whole slide image.
   (alignment padding between blocks is permitted but never required).
 * Metadata attribute keys *should* be encoded as ASCII with UTF-8 values;
   DICOM tag-value encoding *shall* follow NEMA character-set requirements.
+* An enumeration value marked *Deprecated* in its table is retired: an
+  encoder *shall not* write it. The value stays assigned and is never given
+  another meaning, so a file written before the retirement remains
+  conformant to the version it was written under and remains readable.
 
 [[ife-file-structure-elements]]
 == File Structure Elements
@@ -783,6 +787,9 @@ include::{generated}/layout/IMAGES_entry.adoc[]
   undefined value (0).
 +
 include::{generated}/constants/image_encodings.adoc[]
+* An encoder *shall not* write IMAGE_ENCODING_PNG, which is deprecated since
+  version 1.1. A decoder *may* refuse an image so encoded; one that does
+  *shall* name the image's label and its encoding in the refusal.
 * FORMAT *shall* be one of the pixel format values, excluding the
   undefined value (0).
 * ORIENTATION *shall* encode the intended degree of rotation as an IEEE
@@ -863,9 +870,13 @@ slide-space convention (<<ife-terms>>), which is measured against the
 * BYTES_OFFSET *shall* be a valid offset to the corresponding annotation
   byte array.
 * FORMAT *shall* be one of the annotation type values below, excluding the
-  undefined value (0).
+  undefined value (0), and *should* be ANNOTATION_SVG, the preferred
+  annotation encoding: a vector object scales with the slide.
 +
 include::{generated}/constants/annotation_types.adoc[]
+* An encoder *shall not* write ANNOTATION_PNG, which is deprecated since
+  version 1.1. A decoder *may* refuse an annotation so encoded; one that does
+  *shall* name the annotation's identifier and its encoding in the refusal.
 * PIXEL_WIDTH / PIXEL_HEIGHT *shall* be greater than zero and less than
   the 32-bit maximum value.
 * PARENT_ID *may* encode a parent annotation identifier and *should*

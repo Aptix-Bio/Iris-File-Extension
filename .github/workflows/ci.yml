@@ -60,6 +60,8 @@ jobs:
         run: PYTHONHASHSEED=1 python3 tests/generator/test_determinism.py
       - name: Generator -d resolves paths against the named directory
         run: python3 tests/generator/test_directory_flag.py
+      - name: Retired enum members are validated, emitted and off the wire
+        run: python3 tests/generator/test_deprecated.py
       # Runs here rather than in the MSVC job so a Windows-only defect fails
       # in twenty seconds on Linux instead of after a full matrix build. It
       # replaces none of that job; it just gets there first.

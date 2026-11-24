@@ -250,7 +250,7 @@
     }
   },
   "annotation_types": {
-    "description": "The byte format of an annotation visual-object byte stream. Encoded streams shall follow the corresponding external specification (e.g. PNG, SVG).",
+    "description": "The byte format of an annotation visual-object byte stream. Encoded streams shall follow the corresponding external specification (e.g. SVG, JPEG). SVG is the preferred encoding: a vector object scales with the slide.",
     "underlying_type": "u8",
     "ife_version": {
       "1.0": {
@@ -260,7 +260,11 @@
         },
         "ANNOTATION_PNG": {
           "value": 1,
-          "description": "PNG image annotation."
+          "description": "PNG image annotation.",
+          "deprecated": {
+            "version": "1.1",
+            "reason": "PNG is retired (Ryan Landvater, 2026-11-24: \"SVG preferred and let's just cut the PNG then. Simple is better.\"). Writers shall not emit it; SVG is the preferred annotation encoding. The value stays assigned and is never reused, so a file that already carries it still reads, and a reader may refuse the annotation by naming this encoding."
+          }
         },
         "ANNOTATION_JPEG": {
           "value": 2,
@@ -268,7 +272,7 @@
         },
         "ANNOTATION_SVG": {
           "value": 3,
-          "description": "SVG vector annotation."
+          "description": "SVG vector annotation; the preferred annotation encoding."
         },
         "ANNOTATION_TEXT": {
           "value": 4,
@@ -288,7 +292,11 @@
         },
         "IMAGE_ENCODING_PNG": {
           "value": 1,
-          "description": "PNG image."
+          "description": "PNG image.",
+          "deprecated": {
+            "version": "1.1",
+            "reason": "PNG is retired (Ryan Landvater, 2026-11-24: \"SVG preferred and let's just cut the PNG then. Simple is better.\"). Writers shall not emit it; JPEG and AVIF remain for associated images. The value stays assigned and is never reused, so a file that already carries it still reads, and a reader may refuse the image by naming this encoding."
+          }
         },
         "IMAGE_ENCODING_JPEG": {
           "value": 2,

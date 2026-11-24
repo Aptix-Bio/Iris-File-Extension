@@ -223,6 +223,7 @@ Offset Builder_t::append_image(const AssociatedImageInfo& info, const BYTE* data
     ensure_open("append_image");
     const std::string& label = info.imageLabel;
     const std::string  what  = "IFE Builder: image '" + label + "'";
+    refuse_retired(what, static_cast<k::ImageEncodings>(info.encoding));
     if (data == nullptr || size == 0)
         throw std::invalid_argument(what + ": an empty image stream");
     // TITLE_SIZE is u16 and IMAGE_SIZE u32 on the wire.

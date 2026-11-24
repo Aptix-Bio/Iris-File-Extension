@@ -397,8 +397,10 @@ public:
     /** @brief Write one associated image (label + compressed stream) and record
      *         its entry for `image_entries`. Returns the IMAGE_BYTES block's
      *         offset.
-     *  @throws std::invalid_argument for an empty stream, a label longer than
-     *          65535 bytes, or a label already appended. */
+     *  @throws std::invalid_argument for a retired encoding
+     *          (IMAGE_ENCODING_PNG, deprecated since IFE 1.1; the message
+     *          names it), an empty stream, a label longer than 65535 bytes,
+     *          or a label already appended. A refused image writes nothing. */
     Offset append_image(const AssociatedImageInfo& info, const BYTE* data, Size size) const;
 
     // The structure blocks are the caller's to compose: the Builder placed the

@@ -481,6 +481,16 @@ if(IFE_BUILD_TESTS)
                 ${PROJECT_SOURCE_DIR}/tests/generator/test_determinism.py
     )
 
+    # A retired enum member (`deprecated`) is validated, emitted into the C++
+    # layer and the document, and moves no wire fact. The Builder refuses a
+    # retired value through the emitted deprecated_since, so this is the test
+    # that the schema, not a copied literal, decides what is retired.
+    add_test(
+        NAME ife_generator_deprecated
+        COMMAND ${Python3_EXECUTABLE}
+                ${PROJECT_SOURCE_DIR}/tests/generator/test_deprecated.py
+    )
+
     # The README's C++ examples, compiled as published (syntax-only) against the
     # real headers. They once drifted from the API while every test stayed
     # green; each ```cpp block carries an <!-- ife-compile: ... --> annotation
