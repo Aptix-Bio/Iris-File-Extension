@@ -98,7 +98,8 @@ wire constant).
 **Filed 2026-11-24.** Ryan: "We should be using blacksmith for our CI runners".
 GitHub-hosted jobs in Aptix-Bio's private repositories stopped starting over
 billing that day; this repository is public, so its jobs still ran, but all CI
-moves to Blacksmith. Labels from
+moves to Blacksmith. A label change, kept minimal under Ryan's rule of the same
+day ("Simplified streamlined workflows are key"). Labels from
 [Blacksmith's runner overview](https://docs.blacksmith.sh/blacksmith-runners/overview)
 (read 2026-11-24).
 
@@ -106,28 +107,30 @@ moves to Blacksmith. Labels from
 |---|---|---|
 | `ci.yml` spec, downstream, sanitizers, document, wasm, big-endian; `tests` GCC and Clang; `bazel` Linux | `ubuntu-latest` | `blacksmith-2vcpu-ubuntu-2404` |
 | `ci.yml` `tests` MSVC; `bazel` Windows | `windows-latest` | `blacksmith-2vcpu-windows-2025` (public beta; Visual Studio Build Tools 2022 in place of the full IDE) |
-| `ci.yml` `tests-macos` AppleClang and Xcode (split out of `tests`) | `macos-latest` (macOS 26) | `blacksmith-6vcpu-macos-26` |
+| `ci.yml` `tests` AppleClang and Xcode | `macos-latest` (macOS 26) | `blacksmith-6vcpu-macos-26` |
 | `release.yml` verify, document, publish | `ubuntu-latest` | `blacksmith-2vcpu-ubuntu-2404` |
 | `release.yml` package linux-x86_64, linux-arm64 | `ubuntu-22.04`, `ubuntu-22.04-arm` | `blacksmith-2vcpu-ubuntu-2204`, `-2204-arm` (deprecated by Blacksmith; kept for the glibc 2.35 floor) |
 | `release.yml` package windows-x64 | `windows-2022` | `blacksmith-2vcpu-windows-2025` (the only Windows image offered) |
-| `release.yml` `package-macos` (split out of `package`) | `macos-14` | `blacksmith-6vcpu-macos-15` with `CMAKE_OSX_DEPLOYMENT_TARGET=14.0` (no macOS 14 image; the target keeps the floor) |
+| `release.yml` package macos-universal | `macos-14` | `blacksmith-6vcpu-macos-15` with `MACOSX_DEPLOYMENT_TARGET=14.0` (no macOS 14 image; the target keeps the floor) |
 
 - [x] CI-1.1 **Red first.** `tools/runner_labels_lint.py` (run by the `spec` job)
       fails on a GitHub-hosted label, a label Blacksmith does not document, or a
       `-latest` label. Evidence: 44 findings on the base `136dc1c`, exit 1; exit 0
-      after the move.
-- [x] CI-1.2 **macOS last.** A macOS minute bills as twenty 2-vCPU Linux minutes
-      (same page, FAQ), so the macOS legs are their own jobs, `needs:` on the
-      Linux and Windows legs, sharing their steps through a YAML anchor
-      ([GitHub changelog, 2025-09-18](https://github.blog/changelog/2025-09-18-actions-yaml-anchors-and-non-public-workflow-templates/)).
-      Evidence: actionlint 1.7.12 reports only the three shellcheck notes the
-      base already had (labels declared in `.github/actionlint.yaml`).
-- [x] CI-1.3 **Bounded.** Every job has `timeout-minutes`; `CMAKE_BUILD_PARALLEL_LEVEL`
+      after the move. actionlint 1.7.12 reports only the three shellcheck notes
+      the base already had (labels declared in `.github/actionlint.yaml`).
+- [x] CI-1.2 **Bounded.** Every job has `timeout-minutes`; `CMAKE_BUILD_PARALLEL_LEVEL`
       replaces the bare `-j`, which under Makefiles starts every compile at once,
       with the runner's vCPU count (2 on Linux and Windows, 6 on macOS).
-- [ ] CI-1.4 **VERIFY:** every job green on Blacksmith. Owed: the MSVC and Bazel
-      Windows legs on Build Tools 2022, and the big-endian job's QEMU binfmt
-      registration, are first exercised by this pull request's run. The builds
-      configure only once Iris-Headers' `feature/IrisSlideRename` merges.
+- [ ] CI-1.3 **VERIFY:** every job green on Blacksmith. First run (45429158071,
+      2026-11-24): every job started on a Blacksmith runner; spec and document
+      green; the CMake, Bazel, Emscripten and big-endian builds fail at configure
+      or compile because Iris-Headers' `main` lacks the `IrisSlide` rename
+      (`IrisSlideTypes.hpp: No such file or directory`), so they owe a green run
+      after Iris-Headers#5 merges. The Bazel Windows leg reached `cl.exe` on the
+      Build Tools, which shows MSVC was found.
+- [ ] CI-1.4 **macOS last.** A macOS minute bills as twenty 2-vCPU Linux minutes
+      (same page, FAQ); gating the macOS legs on the others (`needs:`) waits for
+      the per-platform reusable workflow of Ryan's 2026-11-24 rule ("unified
+      workflows with good Cmake subscripts").
 - [ ] CI-1.5 Record in `development/WBS.md` and `development/RTM.md` once those
       files are committed (they exist only as untracked files on 2026-11-24).
