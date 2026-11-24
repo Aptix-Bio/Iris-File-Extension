@@ -124,6 +124,7 @@ def _emit_constants_body(
         # collision becomes unrepresentable rather than merely checked.
         derived = group_name == "recovery_codes"
         members: list[tuple[str, str, str, str | None]] = []
+        retired: dict[str, dict[str, str]] = {}
         for _, entries in sorted(group.get("ife_version", {}).items(), key=lambda kv: version_key(kv[0])):
             for member_name, raw in entries.items():
                 entry = raw if isinstance(raw, dict) else {"value": raw}
@@ -142,16 +143,57 @@ def _emit_constants_body(
                 members.append(
                     (member_name, display, str(entry.get("description", "")), entry.get("errata"))
                 )
+                if "deprecated" in entry:
+                    retired[member_name] = entry["deprecated"]
 
+        enum = _pascal(group_name)
         out.append("")
         out.extend(_comment(group.get("description", "")))
-        out.append(f"enum class {_pascal(group_name)} : {cpp} {{")
+        out.append(f"enum class {enum} : {cpp} {{")
         for member_name, display, description, errata in members:
             out.extend(_comment(description, "///"))
             if errata:
                 out.extend(_comment(f"errata: {errata}"))
+            if member_name in retired:
+                out.extend(_comment(
+                    f"deprecated since {retired[member_name]['version']}: "
+                    f"{retired[member_name]['reason']}"))
             out.append(f"    {member_name} = {display},")
         out.append("};")
+
+        # The member's name and its retirement, from the schema, so a writer
+        # refuses a retired value and names it without copying either into
+        # hand-written code. Exhaustive switches with no default: -Wswitch
+        # then flags any hand-written switch this table is meant to replace,
+        # and a value the enumeration does not declare falls through to empty.
+        out += [
+            "",
+            f"/// The {group_name} member's name as the specification spells it;",
+            "/// empty for a value the enumeration does not declare.",
+            f"[[nodiscard]] constexpr std::string_view member_name({enum} __v) noexcept {{",
+            "    switch (__v) {",
+        ]
+        out += [f'        case {enum}::{m}: return "{m}";' for m, *_ in members]
+        out += [
+            "    }",
+            "    return {};",
+            "}",
+            "",
+            f"/// The version that retired a {group_name} member (spec `deprecated`):",
+            "/// writers shall not emit it, and files that already carry it still",
+            "/// read. Empty while the member is current, and for an undeclared value.",
+            f"[[nodiscard]] constexpr std::string_view deprecated_since({enum} __v) noexcept {{",
+            "    switch (__v) {",
+        ]
+        out += [
+            f'        case {enum}::{m}: return "{retired[m]["version"]}";'
+            for m, *_ in members if m in retired
+        ]
+        current = [m for m, *_ in members if m not in retired]
+        out += [f"        case {enum}::{m}:" for m in current]
+        if current:
+            out.append("            return {};")
+        out += ["    }", "    return {};", "}"]
 
     # Named values, one C++ block per group. Each group keeps its own heading
     # so the header reads the way the document does rather than as one
@@ -1451,6 +1493,7 @@ def emit_blocks_header(
         "#include <optional>",
         "#include <limits>",
         "#include <string>",
+        "#include <string_view>",
         "#include <vector>",
         "",
         '#include "IFE_Bytes.hpp"',

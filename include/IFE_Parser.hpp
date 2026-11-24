@@ -79,8 +79,8 @@ public:
     // ---- the read entry points, as methods -------------------------------- //
 
     /// Quick header check (magic, recovery tag, header fits). Does not validate.
-    [[nodiscard]] Result is_iris_codec_file() const noexcept {
-        return ::Iris::File::is_iris_codec_file(m_info);
+    [[nodiscard]] Result is_iris_slide_file() const noexcept {
+        return ::Iris::File::is_iris_slide_file(m_info);
     }
     /// Deep structural validation of every offset in the graph.
     [[nodiscard]] Result validate_file_structure() const noexcept {

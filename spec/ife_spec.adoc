@@ -63,11 +63,11 @@ the address below, and may be consumed in any of the following forms:
 The schema, **the reference implementation**, this document's sources, and the
 release artifacts are all available at:
 
-{repository}[IrisDigitalPathology/Iris-File-Extension]
+{repository}[Aptix-Bio/Iris-File-Extension]
 
-Two projects implement this specification, and they divide by layer and granularity. The reference implementation, below, provides the byte structure and its validation: the blocks, offsets and values this document defines. The Iris Codec Community Module builds on it and provides image compression, decompression and a high-level slide API:
+Two projects implement this specification, and they divide by layer and granularity. The reference implementation, below, provides the byte structure and its validation: the blocks, offsets and values this document defines. The Iris Slide Community Module builds on it and provides image compression, decompression and a high-level slide API:
 
-https://github.com/IrisDigitalPathology/Iris-Codec[IrisDigitalPathology/Iris-Codec]
+https://github.com/Aptix-Bio/Iris-Slide[Aptix-Bio/Iris-Slide]
 
 Implementers writing an encoder or decoder want the schema and the reference
 implementation. Implementers who simply need to *open* a slide want the Codec
@@ -183,6 +183,10 @@ WSI:: whole slide image.
   (alignment padding between blocks is permitted but never required).
 * Metadata attribute keys *should* be encoded as ASCII with UTF-8 values;
   DICOM tag-value encoding *shall* follow NEMA character-set requirements.
+* An enumeration value marked *Deprecated* in its table is retired: an
+  encoder *shall not* write it. The value stays assigned and is never given
+  another meaning, so a file written before the retirement remains
+  conformant to the version it was written under and remains readable.
 
 [[ife-file-structure-elements]]
 == File Structure Elements
@@ -400,7 +404,7 @@ changes what a prior decoder computes.
 
 include::{generated}/layout/CIPHER.adoc[]
 
-The codec cipher is a reserved data-block for future use in the Iris Codec.
+The codec cipher is a reserved data-block for future use in Iris Slide.
 Its offset in the tile table *shall* be encoded as NULL_OFFSET when unused.
 
 [[ife-metadata]]
@@ -409,8 +413,8 @@ Its offset in the tile table *shall* be encoded as NULL_OFFSET when unused.
 include::{generated}/layout/METADATA.adoc[]
 
 * The codec version entries *should* correspond with the major, minor, and
-  build numbers of the Iris Codec implementation that wrote the slide file;
-  they *may* be zero if an Iris Codec module, or derived tool, did not
+  build numbers of the Iris Slide implementation that wrote the slide file;
+  they *may* be zero if an Iris Slide module, or derived tool, did not
   write the file.
 * ATTRIBUTES_OFFSET *should* point to a valid attributes block and
   *shall* be NULL_OFFSET if no attributes are encoded.
@@ -458,6 +462,10 @@ unversioned claim is free text by definition, naming no specification to
 adhere to.
 * SIZES_OFFSET *shall* encode a valid offset to the attribute sizes array.
 * BYTES_OFFSET *shall* encode a valid offset to the attribute byte array.
+* Patient identity *shall not* be written to the attribute arrays under any
+  FORMAT; it belongs only in the clinical metadata stream
+  (<<ife-clinical-metadata>>). Under METADATA_I2S the arrays hold only facts
+  of the slide fixed when it was scanned.
 
 The IFE is not intended to validate clinical interoperability metadata
 specification conformance; that is outside the scope of this specification.
@@ -476,7 +484,8 @@ clinical DICOM metadata) may still be encoded in the __optional__
 NOTE: If DICOM tags are used in these laboratory attributes fields, we recommend
 still adhering to proper data province and including only acquisition information specific to
 WSI files (such as objective or stain type, for example). We recommend shifting
-clinical data such as patient identifiers or diagnoses to the <<ife-clinical-metadata>>.
+other clinical data, such as diagnoses, to the <<ife-clinical-metadata>> as well;
+patient identifiers are required there by the clause above.
 
 The names and admissibility of those pairs are specified separately, by the
 Iris Interoperability Specification (I2S), which states that a key is a DICOM-like
@@ -783,6 +792,9 @@ include::{generated}/layout/IMAGES_entry.adoc[]
   undefined value (0).
 +
 include::{generated}/constants/image_encodings.adoc[]
+* An encoder *shall not* write IMAGE_ENCODING_PNG, which is deprecated since
+  version 1.1. A decoder *may* refuse an image so encoded; one that does
+  *shall* name the image's label and its encoding in the refusal.
 * FORMAT *shall* be one of the pixel format values, excluding the
   undefined value (0).
 * ORIENTATION *shall* encode the intended degree of rotation as an IEEE
@@ -834,8 +846,10 @@ include::{generated}/constants/clinical_encodings.adoc[]
 * The stream itself is not interpreted by this specification, which records
   only its encoding, where its bytes begin, and how many there are.
 
-Setting CLINICAL_OFFSET to NULL_OFFSET and dropping this block de-identifies
-a slide. No other block is affected and no pixel data is rewritten.
+Patient identity *shall* be carried in this stream and in no other block of
+the file. Setting CLINICAL_OFFSET to NULL_OFFSET and dropping this block
+therefore de-identifies a slide. No other block is affected and no pixel data
+is rewritten.
 
 IMPORTANT: An encoder declaring METADATA_I2S undertakes that its attribute
 arrays hold acquisition information only. Clinical and identifying data
@@ -863,9 +877,13 @@ slide-space convention (<<ife-terms>>), which is measured against the
 * BYTES_OFFSET *shall* be a valid offset to the corresponding annotation
   byte array.
 * FORMAT *shall* be one of the annotation type values below, excluding the
-  undefined value (0).
+  undefined value (0), and *should* be ANNOTATION_SVG, the preferred
+  annotation encoding: a vector object scales with the slide.
 +
 include::{generated}/constants/annotation_types.adoc[]
+* An encoder *shall not* write ANNOTATION_PNG, which is deprecated since
+  version 1.1. A decoder *may* refuse an annotation so encoded; one that does
+  *shall* name the annotation's identifier and its encoding in the refusal.
 * PIXEL_WIDTH / PIXEL_HEIGHT *shall* be greater than zero and less than
   the 32-bit maximum value.
 * PARENT_ID *may* encode a parent annotation identifier and *should*

@@ -19,7 +19,7 @@ name: CI
 #               neutralization the Bazel rules need on Windows. The test
 #               rules live in tests/tests.bzl (ife_tests), loaded by
 #               BUILD.bazel
-#   downstream  Iris-Codec (the primary consumer) builds against THIS branch
+#   downstream  Iris-Slide (the primary consumer) builds against THIS branch
 #               via a FetchContent source override -- the check that a change
 #               here does not break the ecosystem that depends on it
 #   sanitizers  the packed loads read exactly 3 and exactly 5 bytes. Without
@@ -35,6 +35,18 @@ name: CI
 #
 # The pattern across the last three: a branch no developer machine executes is
 # a branch no test can check, so each gets a job rather than a comment.
+#
+# Runners (CI-1 in TASKS.md, decided 2026-11-24): every job runs on a
+# Blacksmith runner at a label documented in
+# https://docs.blacksmith.sh/blacksmith-runners/overview (read 2026-11-24),
+# pinned to the OS version the -latest label ran:
+#   Linux    blacksmith-2vcpu-ubuntu-2404   2 vCPU, 8 GB
+#   Windows  blacksmith-2vcpu-windows-2025  2 vCPU, 7 GB; public beta, with
+#            Visual Studio Build Tools 2022 in place of the full IDE
+#   macOS    blacksmith-6vcpu-macos-26      Apple M4; GitHub's macos-26 image
+# CMAKE_BUILD_PARALLEL_LEVEL sets the compile jobs to the runner's vCPU count;
+# a bare -j under Makefiles starts every compile at once.
+# tools/runner_labels_lint.py, run by the spec job, fails on any other label.
 
 on:
   push:
@@ -44,9 +56,12 @@ on:
 jobs:
   spec:
     name: spec documents and drift
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+      - name: Every job on a pinned Blacksmith runner
+        run: python3 tools/runner_labels_lint.py
       - run: python3 -m generator --validate
       - run: python3 -m generator
       - run: python3 -m generator --check
@@ -60,6 +75,8 @@ jobs:
         run: PYTHONHASHSEED=1 python3 tests/generator/test_determinism.py
       - name: Generator -d resolves paths against the named directory
         run: python3 tests/generator/test_directory_flag.py
+      - name: Retired enum members are validated, emitted and off the wire
+        run: python3 tests/generator/test_deprecated.py
       # Runs here rather than in the MSVC job so a Windows-only defect fails
       # in twenty seconds on Linux instead of after a full matrix build. It
       # replaces none of that job; it just gets there first.
@@ -69,13 +86,16 @@ jobs:
   tests:
     name: build and test (${{ matrix.compiler }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: ${{ matrix.jobs }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {os: ubuntu-latest, compiler: GCC}
-          - {os: ubuntu-latest, compiler: Clang, cxx: clang++}
-          - {os: macos-latest, compiler: AppleClang}
+          - {os: blacksmith-2vcpu-ubuntu-2404, jobs: 2, compiler: GCC}
+          - {os: blacksmith-2vcpu-ubuntu-2404, jobs: 2, compiler: Clang, cxx: clang++}
+          - {os: blacksmith-6vcpu-macos-26, jobs: 6, compiler: AppleClang}
           # AppleClang via Makefiles names the driver `c++`; the Xcode generator
           # names it the raw toolchain binary `.../usr/bin/clang++`. That is a
           # different identity to anything above: it is what a tool that
@@ -83,8 +103,8 @@ jobs:
           # driver is a toolchain binary with no SDK default. Both facts bit
           # the README gate (tests/readme/readme_compiles.py), and neither
           # AppleClang leg here nor any Linux leg can reproduce them.
-          - {os: macos-latest, compiler: Xcode, generator: Xcode}
-          - {os: windows-latest, compiler: MSVC}
+          - {os: blacksmith-6vcpu-macos-26, jobs: 6, compiler: Xcode, generator: Xcode}
+          - {os: blacksmith-2vcpu-windows-2025, jobs: 2, compiler: MSVC}
     steps:
       - uses: actions/checkout@v7
       # .deps/corpus is fetched from iris.exampleslides.org at configure (see
@@ -116,16 +136,17 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release
           ${{ matrix.generator && format('-G {0}', matrix.generator) || '' }}
           ${{ matrix.cxx && format('-DCMAKE_CXX_COMPILER={0}', matrix.cxx) || '' }}
-      - run: cmake --build build --config Release -j
+      - run: cmake --build build --config Release
       - run: ctest --test-dir build -C Release --output-on-failure
 
   bazel:
     name: bazel build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [blacksmith-2vcpu-ubuntu-2404, blacksmith-2vcpu-windows-2025]
     steps:
       - uses: actions/checkout@v7
       # MODULE.bazel resolves Iris-Headers via local_path_override
@@ -145,9 +166,9 @@ jobs:
             echo "using ${{ github.repository_owner }}/Iris-Headers"
           else
             echo "no usable ${{ github.repository_owner }}/Iris-Headers" \
-                 "(any clone error above is expected) - falling back to IrisDigitalPathology"
+                 "(any clone error above is expected) - falling back to Aptix-Bio"
             rm -rf ../Iris-Headers
-            git clone --depth 1 https://github.com/IrisDigitalPathology/Iris-Headers.git ../Iris-Headers
+            git clone --depth 1 https://github.com/Aptix-Bio/Iris-Headers.git ../Iris-Headers
           fi
       - uses: bazel-contrib/setup-bazel@0.19.0
         with:
@@ -167,31 +188,38 @@ jobs:
         run: bazel test //... --test_output=errors --verbose_failures --action_env=PATH
 
   downstream:
-    name: Iris-Codec builds against this branch
-    runs-on: ubuntu-latest
+    name: Iris-Slide builds against this branch
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 45
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@v7
-      # Iris-Codec's CMake FetchContent-pulls IFE from origin/main; the
+      # Iris-Slide's CMake FetchContent-pulls IFE from origin/main; the
       # FETCHCONTENT_SOURCE_DIR override redirects that fetch to THIS
       # checkout — the exact state the PR would ship. Plain git, not
       # actions/checkout: checkout rejects paths outside the workspace.
-      # The clone prefers this owner's Iris-Codec fork, so a fork's CI tests
+      # The clone prefers this owner's Iris-Slide fork, so a fork's CI tests
       # the fork's codec against this IFE state; owners without a codec fork
       # (the CMakeLists.txt probe catches missing and empty ones) fall back
       # to the upstream org.
-      # Build-only, matching Iris-Codec's own CI (which runs no ctest). The
-      # apt + jpeg-turbo recipe is copied from that CI verbatim.
-      - name: Check out Iris-Codec beside this repository
+      # Build-only, matching Iris-Slide's own CI (which runs no ctest). The
+      # apt + jpeg-turbo recipe is copied from that CI verbatim. Iris-Slide's
+      # configure installs its dependencies through vcpkg since 2026-11-24
+      # (Iris-Slide cc17fb3), and nasm (for the aom port) and pkg-config are
+      # the system tools its .github/workflows/_build.yml installs because
+      # vcpkg cannot fetch them on Blacksmith's Linux runners.
+      - name: Check out Iris-Slide beside this repository
         shell: bash
         run: |
-          if git clone --depth 1 "https://github.com/${{ github.repository_owner }}/Iris-Codec.git" ../Iris-Codec && \
-             [ -f ../Iris-Codec/CMakeLists.txt ]; then
-            echo "using ${{ github.repository_owner }}/Iris-Codec"
+          if git clone --depth 1 "https://github.com/${{ github.repository_owner }}/Iris-Slide.git" ../Iris-Slide && \
+             [ -f ../Iris-Slide/CMakeLists.txt ]; then
+            echo "using ${{ github.repository_owner }}/Iris-Slide"
           else
-            echo "no usable ${{ github.repository_owner }}/Iris-Codec" \
-                 "(any clone error above is expected) - falling back to IrisDigitalPathology"
-            rm -rf ../Iris-Codec
-            git clone --depth 1 "https://github.com/IrisDigitalPathology/Iris-Codec.git" ../Iris-Codec
+            echo "no usable ${{ github.repository_owner }}/Iris-Slide" \
+                 "(any clone error above is expected) - falling back to Aptix-Bio"
+            rm -rf ../Iris-Slide
+            git clone --depth 1 "https://github.com/Aptix-Bio/Iris-Slide.git" ../Iris-Slide
           fi
       - name: Configure Jpeg-Turbo PPA
         run: |
@@ -200,20 +228,23 @@ jobs:
           sudo wget https://raw.githubusercontent.com/libjpeg-turbo/repo/main/libjpeg-turbo.list -O /etc/apt/sources.list.d/libjpeg-turbo.list
           sudo apt update
       - name: Fetch Dependencies
-        run: sudo apt install libhwy-dev libjpeg-turbo-official libavif-dev libpng-dev zlib1g-dev openslide-tools python3-dev meson ninja-build -y
+        run: sudo apt install libhwy-dev libjpeg-turbo-official libavif-dev libpng-dev zlib1g-dev openslide-tools python3-dev meson ninja-build nasm pkg-config -y
       - name: Configure CMake
         run: >
-          cmake -B build -S ../Iris-Codec
+          cmake -B build -S ../Iris-Slide
           -D CMAKE_BUILD_TYPE=Release
           -D CMAKE_PREFIX_PATH="/opt/libjpeg-turbo/lib64/cmake/libjpeg-turbo/"
           -D TURBOJPEG_INCLUDE="/opt/libjpeg-turbo/include/"
           -D FETCHCONTENT_SOURCE_DIR_IRISFILEEXTENSION=$GITHUB_WORKSPACE
       - name: Build
-        run: cmake --build build --config Release -j
+        run: cmake --build build --config Release
 
   sanitizers:
     name: address and undefined behaviour
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 60
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@v7
       # Corpus cache as in the tests job: fresh runners must not hit the
@@ -228,12 +259,13 @@ jobs:
           -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
-      - run: cmake --build build-asan -j
+      - run: cmake --build build-asan
       - run: ctest --test-dir build-asan --output-on-failure
 
   document:
     name: specification document
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: ruby/setup-ruby@v1
@@ -256,7 +288,8 @@ jobs:
 
   wasm:
     name: emscripten (the residency branch)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: mymindstorm/setup-emsdk@v16
@@ -275,65 +308,26 @@ jobs:
 
   big-endian:
     name: big-endian (s390x)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 30
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v4.2.0
-        with:
-          platforms: s390x
-
-      # Native configure first: it fetches Iris-Headers into .deps/ and renders
-      # generated_source/, so the emulated container only has to compile. Doing
-      # the fetch and the generation under emulation would cost minutes for no
-      # extra coverage -- neither step is architecture dependent.
-      - name: Fetch dependencies and generate (native)
-        run: cmake -B build -DIFE_BUILD_TESTS=ON -DIFE_RUN_GENERATOR=ON
-
-      # The three suites that touch bytes. The parity wall was a compile-time
-      # comparison against the shipped constants and died with the hand-written
-      # layer; the oracle is the byte-level gate and runs here.
-      #
-      # The oracle earns its place here twice over: it reads bytes the shipped
-      # encoder wrote, on a host whose byte order is the opposite of every
-      # machine either was developed on. The corpus fetch runs in the native
-      # configure above, so the container only compiles and reads.
-      - name: Compile and run on s390x
-        run: |
-          docker run --rm --platform linux/s390x -v "$PWD":/repo -w /repo alpine:latest sh -c '
-            set -e
-            apk add --no-cache g++ >/dev/null
-            echo "arch: $(uname -m)"
-            # Include resolution on this emulated host, established by the
-            # 31fbbf6 diagnostics: absolute -I /repo/... fails to open the same
-            # file that relative -I include opens (qemu-user path quirk), so
-            # the paths below are relative -- the container CWD is /repo by
-            # construction. Word-splitting of $INC is verified working.
-            echo "--- IFE_Bytes.hpp:"; ls -la /repo/include/IFE_Bytes.hpp 2>&1
-            INC="-I include -I src -I .deps/irisheaders-src/include -I .deps/irisheaders-src/priv -I generated_source"
-            BLK="generated_source/IFE_Blocks.cpp"
-            # Bisect: the last compile that worked (8f2b46d) was a single-TU
-            # invocation; every failure since has had $BLK on the line. A vs B
-            # isolates whether the second TU is the trigger.
-            echo "--- A: one TU (8f2b46d shape):"
-            g++ -std=c++20 -O2 $INC -o /tmp/a tests/ife_bytes_tests.cpp && echo A_OK || echo A_FAIL
-            echo "--- B: two TUs (failing shape):"
-            g++ -std=c++20 -O2 $INC -o /tmp/b tests/ife_bytes_tests.cpp $BLK && echo B_OK || echo B_FAIL
-            # The real builds, one TU per compile then a link: multi-TU
-            # invocations have failed to resolve -I includes on this host, and
-            # -c + link does not depend on the mechanism.
-            g++ -std=c++20 -O2 $INC -c tests/ife_bytes_tests.cpp -o /tmp/bytes_tu.o
-            g++ -std=c++20 -O2 $INC -c $BLK -o /tmp/blk_tu.o
-            g++ -std=c++20 -O2 /tmp/bytes_tu.o /tmp/blk_tu.o -o /tmp/bytes
-            g++ -std=c++20 -O2 $INC -c tests/ife_blocks_tests.cpp -o /tmp/blocks_tu.o
-            g++ -std=c++20 -O2 /tmp/blocks_tu.o /tmp/blk_tu.o -o /tmp/blocks
-            g++ -std=c++20 -O2 $INC -c tests/ife_window_tests.cpp -o /tmp/window_tu.o
-            g++ -std=c++20 -O2 $INC -c src/IFE_Window.cpp -o /tmp/window_src.o
-            g++ -std=c++20 -O2 /tmp/window_tu.o /tmp/window_src.o -o /tmp/window
-            g++ -std=c++20 -O2 $INC -I tests -c tests/ife_v1_oracle_tests.cpp -o /tmp/oracle_tu.o
-            g++ -std=c++20 -O2 $INC -I tests -c tests/ife_v1_fixture.cpp -o /tmp/fixture_tu.o
-            g++ -std=c++20 -O2 /tmp/oracle_tu.o /tmp/fixture_tu.o /tmp/blk_tu.o -o /tmp/oracle
-            /tmp/bytes
-            /tmp/blocks
-            /tmp/window
-            /tmp/oracle /repo/.deps/corpus
-          '
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A cross compiler and user-mode QEMU on the host, with no container:
+      # cmake/toolchains/s390x-linux-gnu.cmake names qemu-s390x as the
+      # CMAKE_CROSSCOMPILING_EMULATOR, so ctest calls the emulator directly
+      # and nothing depends on a binfmt_misc registration. The registration
+      # docker/setup-qemu-action made did not hold on Blacksmith's runner VMs
+      # and every s390x container failed with "exec format error" (TASKS.md,
+      # CI-2). Generation and the corpus fetch run at configure on the host;
+      # only the test binaries are emulated.
+      - name: Install the s390x cross compiler and QEMU user mode
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends g++-s390x-linux-gnu qemu-user ninja-build
+      # The whole ctest suite under emulation, including the three suites that
+      # touch bytes (bytes, blocks, window) and the v1 oracle, which reads
+      # bytes the shipped encoder wrote on a host whose byte order is the
+      # opposite of every machine either was developed on.
+      # ife_host_byte_order_tests fails unless the binaries execute big-endian.
+      - name: Configure, build and test on s390x
+        run: cmake --workflow --preset big-endian

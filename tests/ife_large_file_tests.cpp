@@ -49,7 +49,7 @@
 #include <vector>
 
 #include "IrisTypes.hpp"
-#include "IrisCodecTypes.hpp"
+#include "IrisSlideTypes.hpp"
 #include "IrisMemory.hpp"           // priv/: the cross-platform sparse arena
 
 #include "IFE_Blocks.hpp"           // under test: generated readers

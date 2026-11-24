@@ -76,7 +76,7 @@ them.
 IFE defines the *byte structure*: where a tile stream starts, how long it is,
 what the offsets and headers around it mean. It references streams in their
 on-disk compressed form and never interprets one. Compression and
-decompression belong to Iris-Codec, and the boundary is the whole reason the
+decompression belong to Iris-Slide, and the boundary is the whole reason the
 two repositories are separate.
 
 The line runs between the stream and everything describing it:
@@ -244,7 +244,7 @@ What survives a handoff belongs in `MIGRATION.md`, here, or in a test.
 ## The Builder lays bytes down; it does not run the application
 
 `Iris::File::Builder` controls how the stream is mutated: it claims space at
-the head and fills it. The application that owns it (Iris-Codec's Encoder)
+the head and fills it. The application that owns it (Iris-Slide's Encoder)
 does sources, codecs, threads, file names — and the layout. Four things that
 look like missing features are that split:
 
@@ -267,7 +267,7 @@ look like missing features are that split:
 * **The Builder does not start threads.** `append_tile` is safe from many
   threads, but which thread encodes which tile is the caller's decision.
 
-IFE never depends on Iris-Codec; the codec depends on IFE. Namespaces show the
+IFE never depends on Iris-Slide; the codec depends on IFE. Namespaces show the
 direction: `Iris::` is the core, `Iris::File::` is this repository.
 
 ## Warnings: `-Wswitch` only protects a switch with no `default:`

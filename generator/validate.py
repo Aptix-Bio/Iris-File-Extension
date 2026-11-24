@@ -430,6 +430,45 @@ def validate(
                 )
             seen_value[value] = name
 
+    # ---- 2b. retired members ------------------------------------------- #
+    # Append-only retires a value instead of removing it: the member keeps its
+    # value, files that carry it still read, and the value is never reused.
+    # `deprecated` is the record of that, and writers refuse the member from
+    # it (the generated deprecated_since), so a retirement nobody can date, or
+    # one whose reason is missing, would be a refusal nobody can explain. The
+    # vocabulary is closed for the same reason the conformance clauses' is.
+    document_version = document.get("version", {})
+    document_key = (int(document_version.get("major", 0)), int(document_version.get("minor", 0)))
+    for group_name, group in groups.items():
+        for introduced, name, raw in _members(group):
+            retirement = raw.get("deprecated") if isinstance(raw, dict) else None
+            if retirement is None:
+                continue
+            where = f"enum {group_name}: member {name!r} deprecated"
+            if not isinstance(retirement, dict):
+                problems.append(f"{where} as {retirement!r}; state {{version, reason}}")
+                continue
+            for key in sorted(set(retirement) - {"version", "reason"}):
+                problems.append(f"{where} with unknown key {key!r}; the keys are version and reason")
+            if not retirement.get("reason"):
+                problems.append(f"{where} without a reason; a writer's refusal has to cite one")
+            label = retirement.get("version")
+            try:
+                key = version_key(str(label))
+            except ValueError:
+                problems.append(f"{where} at malformed version {label!r}")
+                continue
+            if key > document_key:
+                problems.append(
+                    f"{where} at {label}, newer than the document version "
+                    f"{document_key[0]}.{document_key[1]}"
+                )
+            if key <= version_key(introduced):
+                problems.append(
+                    f"{where} at {label}, which does not follow {introduced}, the "
+                    "version that introduced it; a member is retired by a later version"
+                )
+
     # ---- 3. dangling references --------------------------------------- #
     types = fields_doc.get("types", {})
     for block_name, block in blocks.items():

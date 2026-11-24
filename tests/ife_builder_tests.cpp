@@ -9,7 +9,7 @@
  *     the FILE_HEADER and settles the backing file's length. (The
  *     application tier — set_tile_table / append_tile / finalize — is
  *     ife_builder_layered_tests.)
- *   - The bytes the builder produces pass `is_iris_codec_file`,
+ *   - The bytes the builder produces pass `is_iris_slide_file`,
  *     `validate_file_structure`, and `abstract_file_structure`.
  *   - `claim` refuses to write past capacity (the deferred-expansion contract).
  *   - The FILE_HEADER region is the builder's: no claim ever lands in it, so
@@ -166,7 +166,7 @@ int main() {
         builder.head()};
 
     // ---- 2. The structural gates ------------------------------------------ //
-    IFE_CHECK(Iris::File::is_iris_codec_file(info).succeeded());
+    IFE_CHECK(Iris::File::is_iris_slide_file(info).succeeded());
     IFE_CHECK(Iris::File::validate_file_structure(info).succeeded());
 
     // ---- 3. The abstraction round-trips ----------------------------------- //
@@ -194,7 +194,7 @@ int main() {
     {
         const Iris::File::Parser parser(info);
         IFE_CHECK(static_cast<bool>(parser));
-        IFE_CHECK(parser.is_iris_codec_file().succeeded());
+        IFE_CHECK(parser.is_iris_slide_file().succeeded());
         IFE_CHECK(parser.validate_file_structure().succeeded());
         const auto via_parser = parser.abstract_file_structure();
         IFE_CHECK(via_parser.tileTable.extent.width == 512);

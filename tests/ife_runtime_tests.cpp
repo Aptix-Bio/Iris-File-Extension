@@ -4,7 +4,7 @@
  *
  * End-to-end: the snapshot the shipped encoder wrote is read through the
  * public entry points — generated handles over IFE_Bytes, the semantic layer
- * on top — the same way Iris-Codec calls them.
+ * on top — the same way Iris-Slide calls them.
  *
  * This translation unit includes IrisFileExtension.hpp and the type-free fixture
  * loader; the bytes come from the fetched corpus (tests/corpus/README.md).
@@ -89,7 +89,7 @@ void test_validate_accepts_a_v1_file() {
     v1_fixture::Expected expected;
     auto f = v1_slide(expected);
 
-    IFE_CHECK(Iris::File::is_iris_codec_file({f.data(), f.size()}).succeeded());
+    IFE_CHECK(Iris::File::is_iris_slide_file({f.data(), f.size()}).succeeded());
 
     const auto result = Iris::File::validate_file_structure({f.data(), f.size()});
     IFE_CHECK(result.succeeded());
@@ -97,11 +97,11 @@ void test_validate_accepts_a_v1_file() {
 
     // Not an Iris file, and not a crash: the first four bytes decide.
     std::vector<BYTE> noise(64, 0x00);
-    const auto noise_result = Iris::File::is_iris_codec_file({noise.data(), noise.size()});
+    const auto noise_result = Iris::File::is_iris_slide_file({noise.data(), noise.size()});
     IFE_CHECK(noise_result.failed());
     IFE_CHECK(noise_result.domain == Iris::Domain::IRIS_FILE_EXTENSION);
     // Nor is a file too short to hold a header.
-    IFE_CHECK(Iris::File::is_iris_codec_file({f.data(), 4}).failed());
+    IFE_CHECK(Iris::File::is_iris_slide_file({f.data(), 4}).failed());
 }
 
 void test_abstraction_matches_what_was_encoded() {
@@ -117,7 +117,7 @@ void test_abstraction_matches_what_was_encoded() {
     IFE_CHECK((slide.header.extVersion & 0xFFFF) == 0);
 
     // ---- tile table ------------------------------------------------------ //
-    IFE_CHECK(slide.tileTable.encoding == IrisCodec::TILE_ENCODING_JPEG);
+    IFE_CHECK(slide.tileTable.encoding == IrisSlide::TILE_ENCODING_JPEG);
     IFE_CHECK(slide.tileTable.format == Iris::FORMAT_R8G8B8A8);
     IFE_CHECK(slide.tileTable.extent.width == expected.x_extent);
     IFE_CHECK(slide.tileTable.extent.height == expected.y_extent);
@@ -212,7 +212,7 @@ void test_abstraction_matches_what_was_encoded() {
     if (image != slide.images.end()) {
         IFE_CHECK(image->second.info.width == expected.image_width);
         IFE_CHECK(image->second.info.height == expected.image_height);
-        IFE_CHECK(image->second.info.encoding == IrisCodec::IMAGE_ENCODING_JPEG);
+        IFE_CHECK(image->second.info.encoding == IrisSlide::IMAGE_ENCODING_JPEG);
         IFE_CHECK(image->second.byteSize == 96);
         // The stream begins after the label, and the label is not part of it.
         IFE_CHECK(image->second.offset + image->second.byteSize <= expected.file_size);

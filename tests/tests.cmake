@@ -27,6 +27,23 @@ if(IFE_BUILD_TESTS)
     target_link_libraries(ife_bytes_tests PRIVATE ${IFE_Dependencies})
     add_test(NAME ife_bytes_tests COMMAND ife_bytes_tests)
 
+    # The byte order the suite must run under, asserted by a test so that a
+    # cross build cannot pass on the wrong host. The big-endian preset sets
+    # it to "big": without the test, a native compiler or a missing emulator
+    # leaves that job green on a little-endian host.
+    set(IFE_HOST_BYTE_ORDER "" CACHE STRING
+        "Byte order the tests must execute under (big, little, or empty for no check)")
+    if(IFE_HOST_BYTE_ORDER)
+        add_executable(
+            ife_host_byte_order_tests
+            ${PROJECT_SOURCE_DIR}/tests/ife_host_byte_order_tests.cpp
+        )
+        target_compile_features(ife_host_byte_order_tests PRIVATE cxx_std_20)
+        add_test(NAME ife_host_byte_order_tests
+                 COMMAND ife_host_byte_order_tests ${IFE_HOST_BYTE_ORDER})
+        set_target_properties(ife_host_byte_order_tests PROPERTIES FOLDER "Tests")
+    endif()
+
     # Generated block handles: reading and validation executed against a real
     # byte buffer, which compiling the header cannot tell you.
     add_executable(
@@ -147,7 +164,7 @@ if(IFE_BUILD_TESTS)
     endif()
 
     # The public API, end to end: the fetched snapshot in, the four entry
-    # points Iris-Codec calls out. The snapshot lives in .deps/corpus/ (the
+    # points Iris-Slide calls out. The snapshot lives in .deps/corpus/ (the
     # fetch above), so this test needs no second translation unit.
     add_executable(
         ife_runtime_tests
@@ -176,7 +193,7 @@ if(IFE_BUILD_TESTS)
     set_tests_properties(ife_runtime_tests PROPERTIES TIMEOUT 120)
 
     # Phase 0 of the FastFHIR → IFE migration (fastfhir_migration_handoff.md):
-    # the exact surface Iris-Codec consumes from `origin/main`. Iris-Codec pulls
+    # the exact surface Iris-Slide consumes from `origin/main`. Iris-Slide pulls
     # IFE by FetchContent with no version pin, so a rename on main breaks the
     # codec's next configure; this build fails first, here.
     add_executable(
@@ -456,12 +473,17 @@ if(IFE_BUILD_TESTS)
     target_link_libraries(ife_validation_tests PRIVATE ${IFE_Dependencies})
     add_test(NAME ife_validation_tests COMMAND ife_validation_tests)
 
-    # The generated layer stays out of the exported ABI.
+    # The generated layer stays out of the exported ABI. NM_TOOL is the nm
+    # CMake resolved for the toolchain that linked the library (CMAKE_NM).
+    # A PATH search instead takes whichever nm comes first, and an older one
+    # (Anaconda ships cctools' nm without -C) fails the test before it
+    # reads a symbol.
     if(IFE_BUILD_SHARED AND NOT EMSCRIPTEN)
         add_test(
             NAME ife_exported_symbols
             COMMAND ${CMAKE_COMMAND}
                 -DLIBRARY=$<TARGET_FILE:IrisFileExtension>
+                -DNM_TOOL=${CMAKE_NM}
                 -P ${PROJECT_SOURCE_DIR}/tests/exported_symbols.cmake
         )
     endif()
@@ -474,6 +496,16 @@ if(IFE_BUILD_TESTS)
         NAME ife_generator_determinism
         COMMAND ${Python3_EXECUTABLE}
                 ${PROJECT_SOURCE_DIR}/tests/generator/test_determinism.py
+    )
+
+    # A retired enum member (`deprecated`) is validated, emitted into the C++
+    # layer and the document, and moves no wire fact. The Builder refuses a
+    # retired value through the emitted deprecated_since, so this is the test
+    # that the schema, not a copied literal, decides what is retired.
+    add_test(
+        NAME ife_generator_deprecated
+        COMMAND ${Python3_EXECUTABLE}
+                ${PROJECT_SOURCE_DIR}/tests/generator/test_deprecated.py
     )
 
     # The README's C++ examples, compiled as published (syntax-only) against the

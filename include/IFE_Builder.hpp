@@ -61,6 +61,8 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include "IrisFileExtension.hpp"   // the Builder handle, the block vocabulary, FileAccessInfo
@@ -133,10 +135,60 @@ class Builder_t
     std::vector<blocks::ImageEntry>     m_images;
     std::set<std::string>               m_image_labels;
 
+    // ---- the clinical stream: one per file -------------------------------- //
+    /// The CLINICAL_METADATA block `append_clinical` wrote: NULL_OFFSET until
+    /// then, APPENDING while it is being written. Claimed by CAS from
+    /// NULL_OFFSET, so of two concurrent appends exactly one writes.
+    std::atomic<::Iris::File::Offset>   m_clinical{::Iris::File::constants::NULL_OFFSET};
+    /// Offset 0 is the FILE_HEADER's, which no claim can return, so it marks
+    /// an append in flight without colliding with a block. (UNWRITTEN cannot
+    /// serve: it equals NULL_OFFSET.)
+    static constexpr ::Iris::File::Offset APPENDING = 0;
+    /// The METADATA block `fill` wrote, NULL_OFFSET until then. METADATA names
+    /// the clinical stream, so a stream appended after it would be orphaned.
+    std::atomic<::Iris::File::Offset>   m_metadata{::Iris::File::constants::NULL_OFFSET};
+
+    /// The METADATA about to be stored at @p offset, naming the clinical
+    /// stream: CLINICAL_OFFSET left NULL_OFFSET becomes the stream's offset.
+    /// @throws std::invalid_argument if it names a different offset;
+    ///         std::logic_error while that append is still in flight.
+    [[nodiscard]] blocks::MetadataCreateInfo name_clinical(::Iris::File::Offset offset,
+                                                           blocks::MetadataCreateInfo info);
+
     /// The global tile index of (layer, tile); throws for a position the
     /// table does not have, or before set_tile_table.
     std::uint64_t global_index(std::uint32_t layer, std::uint32_t tile) const;
     void      ensure_open(const char* what) const;
+
+    /// Throw `std::invalid_argument` if @p value is a retired member (spec
+    /// `deprecated`, read through the generated `deprecated_since`), naming
+    /// it, the version that retired it, and @p what was being written.
+    template <typename T_Enum>
+    static void refuse_retired(const std::string& what, T_Enum value)
+    {
+        const std::string_view since = ::Iris::File::constants::deprecated_since(value);
+        if (since.empty()) return;
+        throw std::invalid_argument(what + ": " +
+                                    std::string(::Iris::File::constants::member_name(value)) +
+                                    " is deprecated since IFE " + std::string(since) +
+                                    "; writers shall not emit it");
+    }
+
+    /// The entries of IMAGES and ANNOTATIONS are where an image or annotation
+    /// encoding reaches the wire, so those two blocks are refused here when an
+    /// entry names a retired encoding. Every other block passes.
+    template <typename T_Info>
+    static void refuse_retired_entries(const T_Info& info)
+    {
+        if constexpr (std::is_same_v<T_Info, ::Iris::File::blocks::ImagesCreateInfo>)
+            for (std::size_t i = 0; i < info.entries.size(); ++i)
+                refuse_retired("IFE Builder: IMAGES entry " + std::to_string(i),
+                               info.entries[i].ENCODING);
+        else if constexpr (std::is_same_v<T_Info, ::Iris::File::blocks::AnnotationsCreateInfo>)
+            for (const auto& entry : info.entries)
+                refuse_retired("IFE Builder: annotation " + std::to_string(entry.IDENTIFIER),
+                               entry.FORMAT);
+    }
 
 public:
     /// Preconditions: `memory` refers to a live, writable mapping, backed by
@@ -168,6 +220,7 @@ public:
                              Size size, std::uint16_t z_planes);
     void   append_null_tile (std::uint32_t layer, std::uint32_t tile);
     Offset append_image     (const AssociatedImageInfo& info, const BYTE* data, Size size);
+    Offset append_clinical  (constants::ClinicalEncodings encoding, const BYTE* data, Size size);
     void   finalize         (const BuilderFinalizeInfo& info);
 
     // ---- the write record: what the Builder placed, for the caller -------- //
@@ -210,12 +263,20 @@ public:
      * recoverable state, so it throws with the failing block named.
      * @throws std::out_of_range if the block would leave claimed space or
      *         touch the FILE_HEADER region (which only `seal` writes);
-     *         std::logic_error on a finalized builder.
+     *         std::invalid_argument for an IMAGES or ANNOTATIONS entry whose
+     *         encoding is retired (PNG, deprecated since IFE 1.1), naming it,
+     *         or for a METADATA naming a clinical stream other than the one
+     *         `append_clinical` wrote; std::logic_error on a finalized builder.
+     *
+     * A METADATA whose CLINICAL_OFFSET is NULL_OFFSET is stored naming the
+     * stream `append_clinical` wrote, when there is one, so the stream cannot
+     * be left unreferenced.
      */
     template <typename T_Info>
     void fill(::Iris::File::Offset offset, const T_Info& info)
     {
         ensure_open("fill");
+        refuse_retired_entries(info);
         const ::Iris::File::Size   size = ::Iris::File::blocks::size_of(info);
         const ::Iris::File::Offset head = m_head.load(std::memory_order_acquire);
         // Never `offset + size <= head`: that sum can wrap.
@@ -226,7 +287,12 @@ public:
                                     " leaves the claimed range [" +
                                     std::to_string(::Iris::File::blocks::FILE_HEADER::header_size) +
                                     ", " + std::to_string(head) + ")");
-        const ::Iris::File::blocks::Status status = ::Iris::File::blocks::store(m_base, offset, info);
+        const ::Iris::File::blocks::Status status = [&] {
+            if constexpr (std::is_same_v<T_Info, ::Iris::File::blocks::MetadataCreateInfo>)
+                return ::Iris::File::blocks::store(m_base, offset, name_clinical(offset, info));
+            else
+                return ::Iris::File::blocks::store(m_base, offset, info);
+        }();
         if (!status)
             throw std::runtime_error("IFE Builder: store failed for block at offset " +
                                      std::to_string(offset) +
@@ -235,9 +301,12 @@ public:
     }
 
     /// Claim a block's extent at the head, fill it, and return its offset.
+    /// A block `fill` would refuse for a retired encoding is refused before
+    /// the claim, so it takes no space.
     template <typename T_Info>
     ::Iris::File::Offset append(const T_Info& info)
     {
+        refuse_retired_entries(info);
         const ::Iris::File::Offset offset = claim(::Iris::File::blocks::size_of(info));
         fill(offset, info);
         return offset;

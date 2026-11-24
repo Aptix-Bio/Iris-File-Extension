@@ -89,7 +89,7 @@ contents.
 **Not split by tile encoding.** Measured across the whole field schema, the
 only thing that varies with encoding is the `ENCODING` byte; nothing else keys
 off it. A `corpus_AVIF` would differ from a `corpus_JPEG` by one enum byte in
-a repository whose scope excludes compression. Real AVIF bytes are Iris-Codec's
+a repository whose scope excludes compression. Real AVIF bytes are Iris-Slide's
 evidence, not this layer's.
 
 Files are **hosted, not committed**: `iris.exampleslides.org` (Cloudflare R2)

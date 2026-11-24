@@ -35,13 +35,13 @@
 // self-contained by design — it uses the Iris types only after including the
 // headers that define them.
 #include "IrisTypes.hpp"
-#include "IrisCodecTypes.hpp"
+#include "IrisSlideTypes.hpp"
 
 namespace Iris::File {
 
 using Iris::BYTE;
-using IrisCodec::Offset;
-using IrisCodec::Size;
+using IrisSlide::Offset;
+using IrisSlide::Size;
 
 /// Float and double are stored as IEEE 754 bit patterns, so the host's
 /// representation must be the same one. v1 carried software conversion paths

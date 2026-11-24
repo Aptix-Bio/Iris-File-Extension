@@ -1,20 +1,26 @@
 # IFE Migration — JSON-Specified Format, Generated Code & Documentation
 
+> **2026-11-24 — rename.** The open-source library formerly named Iris-Codec
+> is now Iris-Slide (https://github.com/Aptix-Bio/Iris-Slide); its namespace is
+> `IrisSlide` and IFE's entry point is `is_iris_slide_file`. Standing decisions
+> and open work orders below use the new name. Dated records keep Iris-Codec,
+> its file names and its SHAs, which name what existed when they were written.
+
 # ▶ HANDLE LAYER — Builder / Parser, and the namespace hierarchy (2026-09-28)
 
-Decisions (Ryan). The executable work orders live in the gitignored
+Decided 2026-09-28. The executable work orders live in the gitignored
 `fastfhir_cap_api_transfer_handoff.md` Part A; what must outlive it is here.
 
-- **Layering.** An application *owns* an IFE handle: Iris-Codec's Encoder holds an
+- **Layering.** An application *owns* an IFE handle: Iris-Slide's Encoder holds an
   `Iris::File::Builder`, its Slide holds an `Iris::File::Parser`. The Builder
   claims space and writes every block; the Encoder does sources, codecs and
   threads. The Parser owns the read-only mapping and bounds-checked bytes; the
   Slide decodes. Worked example of the split: the *Encoder* names the temp file,
   hands it to the Builder, and moves the finished file — the Builder only
   writes where it is told and leaves a closed file at `finalize`.
-- **IFE is independent of Iris-Codec.** The codec depends on IFE, never the
-  reverse. IFE's handles are built first, anticipating the codec; Ryan rewrites
-  the codec onto them later.
+- **IFE is independent of Iris-Slide.** The codec depends on IFE, never the
+  reverse. IFE's handles are built first, anticipating the codec; the codec is
+  rewritten onto them later.
 - **Arenas never remap.** A HUGE sparse reservation (Builder default 8 GiB);
   growth is pages touched inside it; exhausting it is terminal.
 - **NULL_TILE is a legitimate "no tile here."** A Builder refuses to finalize a
@@ -24,7 +30,7 @@ Decisions (Ryan). The executable work orders live in the gitignored
 - **Namespaces:** IFE is `Iris::File::` (renamed from `IFE::` 2026-09-28, before
   the `IFE::` spelling was ever pushed). Core stays `Iris::` (`Iris::Memory`).
   `Iris::Codec::` for the codec is wanted later, but only after the format
-  vocabulary Iris-Headers still declares in `namespace IrisCodec` (`Metadata`,
+  vocabulary Iris-Headers still declares in `namespace IrisSlide` (`Metadata`,
   `Encoding`, `AssociatedImageInfo`, …) moves to `Iris::`/`Iris::File::` —
   renamed in place it would make File depend on Codec. The `IFE_` prefixes
   (`IFE_EXPORT`, the `IFE_*` global aliases, `IFE_*.hpp`) name the product and
@@ -266,14 +272,14 @@ includes the ASan build (`cmake --build --preset asan && ctest --preset asan`).
     slot's index exactly. Blocks keep `SELF_RADIUS = 2`: 2·10⁻⁷ even at
     64 GiB. **Still open:** the same measurement on a real slide's JPEG and
     AVIF tiles.
-  - **Density is not a rule** (Ryan, 2026-09-28 — OD-R2). RB-0 only measured
+  - **Density is not a rule** (decided 2026-09-28, OD-R2). RB-0 only measured
     files at the reader's own version. A reader computes a block's extent from
     the fields it knows, so in a newer file every BLOCK-shaped type that gained
     fields ends later than the reader thinks. Those gaps are there by design.
     Arrays (stride on disk) and byte arrays (stamped count) do not skew, and
     block **starts** never do (VALIDATION is at offset 0). The file's version is
     in its header, so the reader knows which case it is in.
-  - **Recommendation for OD-R3**, which stays Ryan's: one parent held
+  - **Recommendation for OD-R3**, which the maintainer decides: one parent held
     everywhere, so H5 as a hard constraint.
 - [x] **RB-1 — Restore the read-path damage sweep, without recovery.** ✅ 2026-09-28.
   `ife_damage_sweep_tests` (CMake + Bazel) flips every bit of the three corpus
@@ -402,12 +408,12 @@ includes the ASan build (`cmake --build --preset asan && ctest --preset asan`).
 | in-place apply with rollback | per-group writes with rollback, into OD-R1's target | RB-7 |
 | geometry-bounded array walks (`readable_entries`) | `derive` | RB-5 |
 
-### Open decisions (for Ryan; the default lets work proceed)
+### Open decisions (for the maintainer; the default lets work proceed)
 
 | id | question | default |
 |---|---|---|
 | OD-R1 | Where does `apply` write? FastFHIR copies the stream into a `std::vector`; a slide is GBs. | Into a writable mapping the caller supplies (a clone or copy of the file). Recovery never writes the source. |
-| OD-R2 | Density: a premise or a rule? | **Closed (Ryan, 2026-09-28): never a rule.** A newer file has gaps, by design, wherever an older reader under-counts a block that gained fields. Exact adjacency is used only after a predecessor whose extent is exact: a same-or-older-version file, or an array, byte array or stream. Otherwise its computed end is a lower bound, as FastFHIR's H3 treats it. |
+| OD-R2 | Density: a premise or a rule? | **Closed 2026-09-28: density is not a rule.** A newer file has gaps, by design, wherever an older reader under-counts a block that gained fields. Exact adjacency is used only after a predecessor whose extent is exact: a same-or-older-version file, or an array, byte array or stream. Otherwise its computed end is a lower bound, as FastFHIR's H3 treats it. |
 | OD-R3 | One parent per block and per stream (H5). The spec does not forbid two tile entries sharing a stream, such as a deduplicated blank tile. | RB-0 found no sharing. **Nested attribute values are exempt:** the format lets two share one structure, and `ife_runtime_tests` (`test_shared_nested_structures_are_validated_once`) requires readers to accept it. Default: H5 is a hard constraint on the 16 declared edges and on tile entries, plus a "shall not" for shared streams in the 1.1 draft. |
 | OD-R4 | FILE_REVISION implies in-place edits, which leave superseded blocks with valid witnesses. | Treat them as orphans; RB-5 adds a test that a superseded block is never attached. Revisit if revision is not a supported write mode. |
 | OD-R5 | The public shape. | FastFHIR's: `Recovery(const FileAccessInfo&)` with `census` / `recover` / `apply`, in `IFE_Recovery.hpp` (advanced tier). `RepairClass` becomes FastFHIR's seven: `HoleCorroborated` goes (lost blocks become anchors), and `RootRepaired` goes (the root gets header verdicts). |
@@ -1186,9 +1192,9 @@ where, and what evidence already exists — nothing here needs re-deriving.
       One 2-bit trial produced 3, so "at most one leaf per flipped bit" is
       not a safe assertion.
 
-- [ ] **RC-10.3 — Iris-Codec must write tile frames. (Cross-repo; lockstep.)**
+- [ ] **RC-10.3 — Iris-Slide must write tile frames. (Cross-repo; lockstep.)**
       `TILE_INDEX` is the only identity witness in the format, and RC-9.1 makes
-      it decisive — but `../Iris-Codec/src/IrisCodecEncoder.cpp` contains no
+      it decisive — but `../Iris-Slide/src/IrisSlideEncoder.cpp` contains no
       `TilePixelDataCreateInfo` and no `TILE_INDEX` anywhere, so no real slide
       carries one. The corpus writer does
       (`tests/ife_corpus_writer_11.cpp`), which is why the 1.1 fixture proves
@@ -1271,9 +1277,9 @@ where, and what evidence already exists — nothing here needs re-deriving.
       the fix; not yet reproduced. Move the walkers onto it, and hold the
       bench hash and sweep accounting identical while doing so.
 
-- [ ] **RC-10.8 — Iris-Codec now refuses damaged slides at open. (Cross-repo.)**
+- [ ] **RC-10.8 — Iris-Slide now refuses damaged slides at open. (Cross-repo.)**
       `__INTERNAL__Slide`'s constructor calls `abstract_file_structure()`
-      directly (`IrisCodecSlide.cpp:216`, reached from `IrisCodecCache.cpp:55`
+      directly (`IrisSlide.cpp:216`, reached from `IrisSlideCache.cpp:55`
       with no `validate_file_structure` on that path). Since RC-10.1 that call
       throws on a structurally damaged file instead of returning fabricated
       values or faulting. Decide what a viewer does next: surface the
@@ -1357,7 +1363,7 @@ items were done and marked open; the "Phase 6 is DONE" label belonged to the
 generated-layer milestone inside it). These are what remain between here and
 a released 1.1.
 
-**Decisions taken with the owner, 2026-08-18** — do not re-litigate:
+**Decided 2026-08-18** — do not re-litigate:
 
 * The release is gated on the corpus **harness**, not on full 18-block
   coverage. Coverage keeps growing after the tag, with the gaps recorded.
@@ -1490,7 +1496,7 @@ never the fetch** — the oracle and the >4 GiB test depend on the snapshot.
 
 ## R-2 — Close the reachable corpus gaps (P1) — ✅ DONE
 
-> **Restructured 2026-08-18 (owner decision) — the corpus is a set of frozen
+> **Restructured 2026-08-18 (decision) — the corpus is a set of frozen
 > per-version witnesses, each covering everything its version defines.**
 > Not one moving file: the newest witness *is* the feature corpus while its
 > version is draft, and freezes when the version ratifies. The set grows; no
@@ -1746,7 +1752,7 @@ every claim the README makes about artifacts is true.
 > conformant encoder from the published document.
 >
 > **Closed.** `[[ife-tile-indexing]] ==== Global Tile Indexing` now states the
-> scheme, from the owner's own figure: indices ascend by layer and row-major
+> scheme from the reference figure: indices ascend by layer and row-major
 > within a layer from the upper-left tile, _base_(_l_) is the tile count of
 > every preceding layer, and _G_(_l_, _x_, _y_) = _base_(_l_) + _y_ ×
 > X_TILES~_l_~ + _x_, with the inverse and the total stated as clauses. The
@@ -1765,7 +1771,7 @@ every claim the README makes about artifacts is true.
 > complete without them and poorer for it. They want the v1.0 document, which
 > exists in no checkout here.
 >
-> **R-3.1 held by owner decision (2026-08-19):** the revision stays `draft`
+> **R-3.1 held by decision (2026-08-19):** the revision stays `draft`
 > until the migration above is reviewed. `spec/ife_header.json` is untouched,
 > so R-3.2 has nothing to refresh — the narrative is not part of the wire
 > witness, and `--validate`/`--check` are green without it.
@@ -3911,8 +3917,8 @@ custom preprocessor in the pipeline.
       how many languages cross it. This repository owns the byte structure and
       its validation, and a Python caller manipulating that structure is
       squarely inside it. The two binding sets are complementary rather than
-      duplicative — Iris-Codec's expose high-performance decode and encode;
-      these expose the low-level byte manipulation Iris-Codec deliberately
+      duplicative — Iris-Slide's expose high-performance decode and encode;
+      these expose the low-level byte manipulation Iris-Slide deliberately
       hides.
 
       C++ remains the preferred language for an encoder or decoder, but that is
@@ -3921,7 +3927,7 @@ custom preprocessor in the pipeline.
       machine-readable precisely so that implementations need not all look
       alike.
 
-      **Bind the `Abstraction::` methods** — `is_iris_codec_file`,
+      **Bind the `Abstraction::` methods** — `is_iris_slide_file`,
       `validate_file_structure`, `abstract_file_structure`,
       `generate_file_map`, `recover_file_structure`, and the `Abstraction::`
       structs. Each entry point takes a single `const FileAccessInfo&`
@@ -4003,11 +4009,11 @@ about the corpus, not about the schema. `ife_wire_parity_tests` excludes this
 member with a pointer here; the exclusion is deliberate and should not be
 "fixed".
 
-#### Ryan's response — the resolution
-You can tell free-text from I2S because free text should have a version number
-of zero while I2S will carry a version number. It's in the original spec.
-The idea is that non-versioned I2S is by definition just free text as it
-has no specification to adhere to.
+#### The resolution (decided)
+The attributes' version number distinguishes free text from I2S, as the
+original specification defines: free text carries version zero, and I2S
+carries a nonzero I2S version. An unversioned I2S claim has no
+specification to conform to, so it is free text by definition.
 
 **Shipped.** The disambiguation is normative text in the published document
 (§2.3.5 Attributes, the paragraph beginning "IFE 1.0 gave METADATA_FREE_TEXT
@@ -4018,7 +4024,7 @@ Nothing further is owed before release.
 
 ### Resolved — the consumer-facing namespace: `Serialization::` vs the generated three-way split
 
-The owner's concern (carried in the session handoff): the generated layer's
+The question: the generated layer's
 three-way namespace split — `IFE::blocks` / `IFE::constants` / `IFE::vtables`
 — may have been an unnecessary distinction, and the retired hand-written
 `Serialization::` namespace may have been the better system for the consumer
@@ -4083,15 +4089,15 @@ one file, 33 sites, rename-plus-reshape, include fix at
 over the generated layer. (c) Hybrid — semantic aliases for the write path
 only.
 
-**Decision (2026-08-12): (b), but *generated*, not hand-written.** The
-owner's ruling, recorded verbatim: the reason for a unified
-`IFE::Serialization` is *not* past compatibility — it is that the
-three-way split is unintuitive, the prior API contract was simple, and "the
-API should make it foolproof". A hand-written compat layer was tried and
-rejected on the spot: a hand-maintained CreateInfo struct cannot carry
-changes to the specification — "additional fields may be added to
-AssociatedImage in the future (the JSON spec) but this will be stuck and
-we'll have to remember. It's a bad design."
+**Decision (2026-08-12): (b), emitted by the generator.** A unified
+`IFE::Serialization` exists because the three-way split is unintuitive and
+the prior API contract was simple: one namespace leaves a consumer no wrong
+namespace to choose, so the API cannot be misused that way. Past
+compatibility is not the reason. A hand-written compat layer was tried and
+rejected: a hand-maintained CreateInfo struct does not pick up fields
+appended to the JSON specification (for example a new `AssociatedImage`
+field), so every spec change would need a manual wrapper update that
+nothing enforces.
 
 **What was built instead.** The generator now emits a fourth file,
 `generated_source/IFE_Serialization.hpp`, a pure re-export of the whole
@@ -4144,7 +4150,7 @@ a shared `:ife_blocks`. And the big-endian job's hand-written `g++` lines
 compile the `.cpp` again. CMake needed no change: it globs
 `generated_source/*.cpp`.
 
-**One generated header — the owner's ruling, applied.** The generated
+**One generated header (decided 2026-08-12).** The generated
 C++ layer is now a single `IFE_Blocks.hpp`: constants, derived vtables,
 the block handles with their inline definitions, and the
 `IFE::Serialization` consumer namespace all in one file. The
@@ -4157,8 +4163,7 @@ the `primitives::` indirection and the base-class explanation disappear
 from the consumer's view. Consumers still include exactly one name
 (`IrisFileExtension.hpp`), and the append-only invariant and
 "schema stays weak" rule are untouched — this changed only how the C++ is
-packaged, not what the schema drives. The file is ordered for reading, per
-the owner: the writers' payloads and entry points (the `*CreateInfo`
+packaged, not what the schema drives. The file is ordered for reading: the writers' payloads and entry points (the `*CreateInfo`
 structs, `ValidationHooks`, `store()`/`size_of()` declarations) come first
 inside `IFE::blocks`, and each block's derived vtable is emitted beside its
 struct rather than in one separate table wall. The final step folded the
@@ -4183,12 +4188,12 @@ same semantic `Attributes`). The pairing is declared in the schema
 (`"from_pairs": true` on the two blocks) so the generator derives it
 rather than hard-coding block names.
 
-**⚠⚠⚠ THE ATTRIBUTE WIRE IS BEING RESHAPED — DECISION (2026-08-12, owner, pre-consumer window).** Attribute values become **tagged**: a `KIND` byte in the `ATTRIBUTE_SIZE` entry (KEY_SIZE, VALUE_SIZE, KIND) says whether the value is a plain string (`0`) or an **offset to a complete nested attribute structure** (`1`) — its own sizes+bytes laid out recursively, so DICOM sequences (and any tree) are representable natively instead of flattened-by-convention. This is a **reshape, not an addition** — it changes what the value bytes mean — and it is being done now because the format is pre-ratification and effectively unused: the oracle fixtures on `iris.exampleslides.org` are regenerated by the new writer as part of the change, and append-only binds the *result*, not the process of defining it. Design shape fixed at decision time:
+**⚠⚠⚠ THE ATTRIBUTE WIRE IS BEING RESHAPED — DECISION (2026-08-12, pre-consumer window).** Attribute values become **tagged**: a `KIND` byte in the `ATTRIBUTE_SIZE` entry (KEY_SIZE, VALUE_SIZE, KIND) says whether the value is a plain string (`0`) or an **offset to a complete nested attribute structure** (`1`) — its own sizes+bytes laid out recursively, so DICOM sequences (and any tree) are representable natively instead of flattened-by-convention. This is a **reshape, not an addition** — it changes what the value bytes mean — and it is being done now because the format is pre-ratification and effectively unused: the oracle fixtures on `iris.exampleslides.org` are regenerated by the new writer as part of the change, and append-only binds the *result*, not the process of defining it. Design shape fixed at decision time:
 - **A byte, not a bit** — `0` = string, `1` = offset; room for future kinds without another wire break.
 - **The offset target is a complete nested attribute structure** — well-formed by construction, recursed with a depth bound and the existing `VisitPath` / `MAX_BLOCK_DEPTH` cycle machinery.
 - **Claims stay orthogonal to structure** — `METADATA_I2S` / `METADATA_DICOM` keep describing the key *vocabulary*; `KIND` describes the value's *structure*; one attributes block can mix strings and nested offsets, which is exactly a DICOM sequence tree.
 - **The rebuilt format is born as its real 1.0** — spec document, oracle, and encoder regenerate together as one coherent act.
-Status: **DECIDED — NOT YET IMPLEMENTED.** The generator, spec JSON, oracle, Iris-Codec encoder, and this document's other records update together in the implementation pass. This paragraph is the loud announcement; the historical flat contract below it is superseded.
+Status: **DECIDED — NOT YET IMPLEMENTED.** The generator, spec JSON, oracle, Iris-Slide encoder, and this document's other records update together in the implementation pass. This paragraph is the loud announcement; the historical flat contract below it is superseded.
 
 **⚠ SUPERSEDED BY THE DECISION ABOVE — the flat contract this paragraph records described the format as shipped; it is being reshaped.** The attribute index (`ATTRIBUTE_SIZES`' `KEY_SIZE`/`VALUE_SIZE` entry + the packed `ATTRIBUTE_BYTES` run) is a flat key→value slice store, and that is the format's shipped 1.0 contract — not an omission this migration can repair, and not a regression: the retired layer's `Attributes` was equally flat (`std::map<std::string, std::u8string>`), and the pinned oracle fixtures prove the flat wire. The `METADATA_DICOM` claim is "DICOM PS3.3 tag-value pairs (32-bit tags, UTF-8 values per NEMA character-set requirements), carried without restriction" — "without restriction" constrains the *vocabulary* (any DICOM tag may be carried), not the *structure* (nested sequences are not represented). DICOM's tree is flattened at the consumer boundary — `IrisCodecDcmBridge.cpp` descends nested sequences and emits flat pairs, the standard DICOM→flat-store interop pattern, with the key encoding the path (`0040,A730[0]/0008,0100` or the leaf tag). The pairs payload (`std::vector<std::pair<std::string, std::string>>`) carries those flat path-keys unchanged; nothing in the API blocks DICOM. The format cannot grow nesting in place — the index is shipped 1.0 and append-only forbids reshaping it — and the "schema stays weak" rule forbids adding a tree vocabulary to describe how one consumer serializes its structures. **The honest residual, stated plainly:** if a future consumer needs the DICOM tree *structure itself* preserved rather than its flattened leaf pairs, the flat format cannot hold it. The additive escape hatch is a future appended block, deliberately gated behind a real consumer need — it must never change the shipped 1.0 blocks.
 

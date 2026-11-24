@@ -107,6 +107,28 @@ the validation layer there is nothing here to enforce, and it makes the
 published document say "Reserved" or "Not specified by this document" instead
 of leaving a cell empty.
 
+## Retiring an enumeration member (`deprecated`)
+
+Append-only forbids removing a value, because files already carry it. A
+member is retired instead, with `deprecated` on its entry:
+
+```json
+"IMAGE_ENCODING_PNG": { "value": 1, "description": "PNG image.",
+  "deprecated": { "version": "1.1", "reason": "..." } }
+```
+
+| Key | Meaning |
+|---|---|
+| `version` | the specification version that retired the member: later than the version group that introduced it, and no later than the document |
+| `reason` | why, in prose; it appears in the generated header, the published table and every writer's refusal |
+
+The vocabulary is closed and `--validate` enforces it. A retirement changes no
+wire fact, so the witness does not move. The member keeps its value, readers
+keep reading it, and writers refuse it: the generated
+`constants::deprecated_since(value)` is non-empty for a retired member and
+`constants::member_name(value)` names it, so the Builder's refusal comes from
+the schema instead of a copied literal.
+
 ## Strings
 
 **There is no string type.** Every string in IFE is a byte range whose length

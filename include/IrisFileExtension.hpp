@@ -17,7 +17,7 @@
  *
  * The entry points carry the house API shape: snake_case names, a single
  * `FileAccessInfo` argument (mapped pointer + size), and `Result` returns.
- * Iris-Codec consumes this surface directly.
+ * Iris-Slide consumes this surface directly.
  */
 
 #ifndef IRIS_FILE_EXTENSION_HPP
@@ -75,7 +75,7 @@
 #endif
 
 #include "IrisTypes.hpp"
-#include "IrisCodecTypes.hpp"
+#include "IrisSlideTypes.hpp"
 
 #include "IFE_Blocks.hpp"
 // Iris::File::Window is the Emscripten windowed fetch (remote file ranges over
@@ -89,13 +89,13 @@
 // Buffer, Memory, …), `Iris::File::` is this repository, and a codec builds on
 // both. Nesting is why this layer sees `Iris::` names without a using-directive.
 namespace Iris::File {
-// IFE also composes the Iris-Headers vocabulary that still lives in its
-// `IrisCodec` namespace — `Encoding`, `Metadata`, `AssociatedImageInfo`,
-// `MetadataType`, … (IrisCodecTypes.hpp). Those types describe what is in the
-// file, and IFE depends on Iris-Headers, not on the Iris-Codec repository; the
-// namespace name is historical. Narrow this to explicit `using IrisCodec::X;`
-// declarations if the breadth is ever a problem.
-using namespace IrisCodec;
+// IFE also composes the Iris-Headers vocabulary that lives in its
+// `IrisSlide` namespace — `Encoding`, `Metadata`, `AssociatedImageInfo`,
+// `MetadataType`, … (IrisSlideTypes.hpp). Those types describe what is in the
+// file, and IFE depends on Iris-Headers, not on the Iris-Slide repository; the
+// namespace is named for that library, its main consumer. Narrow this to
+// explicit `using IrisSlide::X;` declarations if the breadth is ever a problem.
+using namespace IrisSlide;
 
 namespace Abstraction {
 struct File;
@@ -152,7 +152,7 @@ struct IFE_EXPORT FileAccessInfo {
 /// Result carrying a FileError and a message, which means rejecting a file costs a formatted string:
 /// worth knowing when the caller is sorting a directory rather than opening a
 /// slide it already expects to be one.
-Result               IFE_EXPORT is_iris_codec_file      (const FileAccessInfo&) noexcept;
+Result               IFE_EXPORT is_iris_slide_file      (const FileAccessInfo&) noexcept;
 
 /**
  * @brief Performs deep file validation checks to ensure stuctural offsets are valid. This does NOT perform
@@ -234,7 +234,7 @@ public:
     static Parser open(const std::filesystem::path& path);
 
     /// Quick header check (magic, recovery tag, header fits). Does not validate.
-    Result is_iris_codec_file() const noexcept;
+    Result is_iris_slide_file() const noexcept;
     /// Deep structural validation of every offset in the graph.
     Result validate_file_structure() const noexcept;
     /// Lift the file structure into memory for quick data access (a fresh
@@ -345,8 +345,8 @@ class Builder_t;   ///< the write BODY — defined in "IFE_Builder.hpp"
  * names the file and moves it once `finalize` returns.
  *
  * Usage: `create` → `set_tile_table` → `append_tile` / `append_null_tile` for
- * every tile (any order, any threads) and `append_image` per associated image
- * → compose the structure in the order you choose through the block tier
+ * every tile (any order, any threads), `append_image` per associated image
+ * and at most one `append_clinical` → compose the structure in the order you choose through the block tier
  * (`builder->append` / `claim` + `fill`), building the tile offsets from
  * `tile_offsets()` and the images array from `image_entries()` → `finalize`
  * with the tile table and metadata offsets.
@@ -397,9 +397,32 @@ public:
     /** @brief Write one associated image (label + compressed stream) and record
      *         its entry for `image_entries`. Returns the IMAGE_BYTES block's
      *         offset.
-     *  @throws std::invalid_argument for an empty stream, a label longer than
-     *          65535 bytes, or a label already appended. */
+     *  @throws std::invalid_argument for a retired encoding
+     *          (IMAGE_ENCODING_PNG, deprecated since IFE 1.1; the message
+     *          names it), an empty stream, a label longer than 65535 bytes,
+     *          or a label already appended. A refused image writes nothing. */
     Offset append_image(const AssociatedImageInfo& info, const BYTE* data, Size size) const;
+
+    /**
+     * @brief Write the file's clinical metadata stream (HL7 v2, FHIR as JSON,
+     *        or FastFHIR) as one CLINICAL_METADATA block, and return its offset.
+     *
+     * The stream is the only place patient identity belongs (spec
+     * ife-clinical-metadata); dropping it de-identifies the slide. The bytes
+     * are carried unmodified and never parsed. METADATA names the stream: a
+     * METADATA filled afterwards through the block tier with CLINICAL_OFFSET
+     * left NULL_OFFSET is stored naming this block, so call this before
+     * filling METADATA (claim METADATA early if it must sit earlier on disk).
+     * Thread-safe.
+     *
+     * @throws std::invalid_argument for CLINICAL_UNDEFINED or a value
+     *         clinical_encodings does not define, an empty stream, or one
+     *         past the u32 COUNT; std::logic_error for a second stream (the
+     *         message names the first's offset), a stream after METADATA was
+     *         filled, or after `finalize`. A refused stream writes nothing.
+     */
+    Offset append_clinical(constants::ClinicalEncodings encoding, const BYTE* data,
+                           Size size) const;
 
     // The structure blocks are the caller's to compose: the Builder placed the
     // tiles and the images, so it reports what it placed, and the caller names
@@ -431,7 +454,9 @@ public:
      * written size, leaving it closed for the caller to move. After this the
      * builder accepts no more writes. Call it once every append has joined.
      * @throws std::invalid_argument, before any write, if either root is
-     *         NULL_OFFSET.
+     *         NULL_OFFSET; std::logic_error if a clinical stream was appended
+     *         and @p info names a METADATA the Builder did not fill, which
+     *         would leave the stream unreferenced.
      */
     void finalize(const BuilderFinalizeInfo& info) const;
 
@@ -464,7 +489,7 @@ struct IFE_EXPORT Header {
     uint32_t revision   = 0;
 };
 
-/// RESERVED FOR FUTURE IRIS CODEC IMPLEMENTATION.
+/// RESERVED FOR FUTURE IRIS SLIDE IMPLEMENTATION.
 struct IFE_EXPORT Cipher {
     Offset offset = ::Iris::File::constants::NULL_OFFSET;
 };
@@ -553,7 +578,7 @@ using AttributeSet = std::vector<AttributeNode>;
 
 /// One attribute, with the value's structure preserved.
 ///
-/// IrisCodec::Metadata::attributes is a flat map of string to string, so a
+/// IrisSlide::Metadata::attributes is a flat map of string to string, so a
 /// value that is a sequence of nested attribute sets has nowhere to go in it.
 /// The alternative to carrying the tree here would be flattening it back into
 /// path-shaped keys — which is the convention the nested wire format exists to
@@ -587,7 +612,7 @@ struct IFE_EXPORT File {
     /// Empty when the file encodes no attributes at all.
     ///
     /// Held on File rather than on Metadata beside the flat map for the same
-    /// reason clinicalOffset is: IrisCodec::Metadata is defined in
+    /// reason clinicalOffset is: IrisSlide::Metadata is defined in
     /// Iris-Headers rather than in this repository. Move it there when that
     /// header gains the field.
     AttributeSet     attributeTree;
@@ -605,7 +630,7 @@ struct IFE_EXPORT File {
     /// drops this stream alone and leaves that untouched.
     ///
     /// Held on File rather than on Metadata beside ICC_profile only because
-    /// IrisCodec::Metadata is defined in Iris-Headers rather than in this
+    /// IrisSlide::Metadata is defined in Iris-Headers rather than in this
     /// repository. Move it there when that header gains the field.
     Offset           clinicalOffset = ::Iris::File::constants::NULL_OFFSET;
     Size             clinicalSize   = 0;
@@ -638,7 +663,7 @@ struct IFE_EXPORT File {
 // does not want to qualify with Iris::File:: on every line. The IFE_ prefix is
 // the namespace spelled out — the same convention FastFHIR's FF_ aliases use
 // (../FastFHIR/include/FastFHIR.hpp). Alias only: nothing here renames a
-// namespaced symbol, so existing consumers (Iris-Codec) are unaffected.
+// namespaced symbol, so existing consumers (Iris-Slide) are unaffected.
 //
 // The file-map aliases (FileMap, MapEntryType, Gap, ...) live in
 // "IFE_Recovery.hpp" beside those types.

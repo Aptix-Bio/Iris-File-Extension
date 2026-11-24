@@ -199,9 +199,15 @@ def emit_constants_table(
                 display = ""
             else:
                 display = str(parse_int(value))
-            out.append(
-                f"|`{name}` |{display} |{_cell(str(entry.get('description', '')))}"
-            )
+            description = str(entry.get("description", ""))
+            # A retired member stays in the table, because files that carry it
+            # still read; the row states the retirement beside the value so a
+            # writer reading the table does not emit it.
+            if retirement := entry.get("deprecated"):
+                description += (
+                    f" *Deprecated since {retirement['version']}:* {retirement['reason']}"
+                )
+            out.append(f"|`{name}` |{display} |{_cell(description)}")
             index += 1
     out += ["|===", ""]
     return "\n".join(out)

@@ -11,7 +11,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -223,6 +225,7 @@ Offset Builder_t::append_image(const AssociatedImageInfo& info, const BYTE* data
     ensure_open("append_image");
     const std::string& label = info.imageLabel;
     const std::string  what  = "IFE Builder: image '" + label + "'";
+    refuse_retired(what, static_cast<k::ImageEncodings>(info.encoding));
     if (data == nullptr || size == 0)
         throw std::invalid_argument(what + ": an empty image stream");
     // TITLE_SIZE is u16 and IMAGE_SIZE u32 on the wire.
@@ -261,6 +264,74 @@ Offset Builder_t::append_image(const AssociatedImageInfo& info, const BYTE* data
         // takes degrees, and store() encodes them back to the same bits.
         .ORIENTATION  = half_to_float(static_cast<std::uint16_t>(info.orientation))});
     return at;
+}
+
+// ---- the clinical stream ------------------------------------------------ //
+
+Offset Builder_t::append_clinical(k::ClinicalEncodings encoding, const BYTE* data, Size size)
+{
+    ensure_open("append_clinical");
+    const std::string what = "IFE Builder: clinical stream";
+    // A decoder selects its parser from ENCODING (spec ife-clinical-metadata),
+    // so a value that names no serialization is refused before anything is
+    // claimed.
+    const std::string_view name = k::member_name(encoding);
+    if (name.empty())
+        throw std::invalid_argument(what + ": encoding " +
+                                    std::to_string(static_cast<unsigned>(encoding)) +
+                                    " is not a clinical_encodings member");
+    if (encoding == k::ClinicalEncodings::CLINICAL_UNDEFINED)
+        throw std::invalid_argument(what + ": CLINICAL_UNDEFINED names no serialization");
+    refuse_retired(what, encoding);
+    if (data == nullptr || size == 0)
+        throw std::invalid_argument(what + ": " + std::string(name) + " with an empty stream");
+    // COUNT is u32 on the wire.
+    if (size > std::numeric_limits<std::uint32_t>::max())
+        throw std::invalid_argument(what + ": a " + std::to_string(size) +
+                                    "-byte stream exceeds the u32 COUNT");
+    const Offset metadata = m_metadata.load(std::memory_order_acquire);
+    if (metadata != k::NULL_OFFSET)
+        throw std::logic_error(what + ": METADATA was written at offset " +
+                               std::to_string(metadata) +
+                               " before it; append the stream first, since METADATA names it");
+
+    // One stream per file: METADATA has a single CLINICAL_OFFSET. The CAS
+    // reserves the slot before the claim, so a refused second stream takes
+    // no space.
+    Offset first = k::NULL_OFFSET;
+    if (!m_clinical.compare_exchange_strong(first, APPENDING, std::memory_order_acq_rel,
+                                            std::memory_order_acquire))
+        throw std::logic_error(what + ": " + std::string(name) +
+                               " refused; the file's one clinical stream " +
+                               (first == APPENDING ? std::string("is being appended")
+                                                   : "is at offset " + std::to_string(first)));
+
+    const b::ClinicalMetadataCreateInfo info{.ENCODING = encoding, .bytes = data, .count = size};
+    const Offset at = claim(b::size_of(info));
+    const b::Status status = b::store(m_base, at, info);
+    if (!status)
+        throw std::runtime_error(what + ": CLINICAL_METADATA failed to store (field '" +
+                                 std::string(status.field) + "')");
+    m_clinical.store(at, std::memory_order_release);
+    return at;
+}
+
+b::MetadataCreateInfo Builder_t::name_clinical(Offset offset, b::MetadataCreateInfo info)
+{
+    const Offset clinical = m_clinical.load(std::memory_order_acquire);
+    if (clinical == APPENDING)
+        throw std::logic_error("IFE Builder: METADATA filled while the clinical stream is "
+                               "still being appended; fill it once append_clinical returns");
+    if (clinical != k::NULL_OFFSET) {
+        if (info.CLINICAL_OFFSET == k::NULL_OFFSET)
+            info.CLINICAL_OFFSET = clinical;
+        else if (info.CLINICAL_OFFSET != clinical)
+            throw std::invalid_argument(
+                "IFE Builder: METADATA names offset " + std::to_string(info.CLINICAL_OFFSET) +
+                " as its clinical stream; append_clinical wrote it at " + std::to_string(clinical));
+    }
+    m_metadata.store(offset, std::memory_order_release);
+    return info;
 }
 
 // ---- the write record, and the read side -------------------------------- //
@@ -313,6 +384,14 @@ void Builder_t::finalize(const BuilderFinalizeInfo& info)
         throw std::invalid_argument("IFE Builder: finalize without a tile table");
     if (info.metadata == k::NULL_OFFSET)
         throw std::invalid_argument("IFE Builder: finalize without a METADATA block");
+    // A clinical stream is reachable only through the METADATA that names it.
+    const Offset clinical = m_clinical.load(std::memory_order_acquire);
+    if (clinical != k::NULL_OFFSET &&
+        m_metadata.load(std::memory_order_acquire) != info.metadata)
+        throw std::logic_error("IFE Builder: finalize names METADATA at " +
+                               std::to_string(info.metadata) +
+                               ", which the Builder did not fill, so nothing names the "
+                               "clinical stream at " + std::to_string(clinical));
     seal(b::FileHeaderCreateInfo{
         .FILE_REVISION     = info.revision,
         .TILE_TABLE_OFFSET = info.tileTable,
@@ -389,6 +468,10 @@ Offset Builder::append_tile(uint32_t layer, uint32_t tile, const BYTE* data, Siz
 void   Builder::append_null_tile(uint32_t layer, uint32_t tile) const { get()->append_null_tile(layer, tile); }
 Offset Builder::append_image(const AssociatedImageInfo& info, const BYTE* data, Size size) const {
     return get()->append_image(info, data, size);
+}
+Offset Builder::append_clinical(constants::ClinicalEncodings encoding, const BYTE* data,
+                                Size size) const {
+    return get()->append_clinical(encoding, data, size);
 }
 std::vector<blocks::TileOffsetEntry> Builder::tile_offsets() const { return get()->tile_offsets(); }
 std::vector<blocks::ImageEntry>      Builder::image_entries() const { return get()->image_entries(); }

@@ -248,7 +248,7 @@ def ife_tests(
         args = ["_main/tests/corpus/v1_0_witness.test_slide"],
     )
 
-    # Phase 0 of the FastFHIR → IFE migration: the surface Iris-Codec consumes.
+    # Phase 0 of the FastFHIR → IFE migration: the surface Iris-Slide consumes.
     cc_test(
         name = "ife_api_contract_tests",
         srcs = ["tests/ife_api_contract_tests.cpp"],

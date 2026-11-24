@@ -19,6 +19,15 @@
  *     two valid files that read back alike, each block where it was put — a
  *     METADATA block `claim`ed early and `fill`ed last included.
  *   - File-backed: `finalize` leaves a complete, closed file the caller moves.
+ *   - PNG is retired (spec `deprecated`, IFE 1.1): the Builder refuses a PNG
+ *     associated image or annotation, naming the encoding, and writes
+ *     nothing; a file a pre-retirement writer produced still validates and
+ *     reads.
+ *   - The clinical stream: `append_clinical` writes one CLINICAL_METADATA
+ *     block, METADATA names it, and the stream reads back byte-exact with
+ *     its encoding; a second stream, an undefined encoding, an empty stream,
+ *     a METADATA naming another offset, and a stream after METADATA are each
+ *     refused by name and write nothing.
  *
  * Self-contained (no framework). Non-zero exit on failure.
  */
@@ -34,6 +43,7 @@
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -58,6 +68,15 @@ int g_failures = 0;
 template <class E>
 bool throws(const std::function<void()>& fn) {
     try { fn(); } catch (const E&) { return true; } catch (...) { return false; }
+    return false;
+}
+
+/// Expect `fn` to throw exactly `E`, with a message naming `name`.
+template <class E>
+bool throws_naming(const std::function<void()>& fn, std::string_view name) {
+    try { fn(); }
+    catch (const E& error) { return std::string_view(error.what()).find(name) != std::string_view::npos; }
+    catch (...) { return false; }
     return false;
 }
 
@@ -103,14 +122,10 @@ constexpr uint32_t REVISION = 7;
 /// Where write_structure put each block.
 struct Placed { Offset table, metadata, icc, images, attributes; };
 
-/// Place everything after the tiles and seal. `metadata_first` reserves the
-/// METADATA block right after the tile table and fills it once its children
-/// exist (Iris-Codec's order: fixed-size blocks ahead of the ones that change);
-/// otherwise METADATA is appended last. Either is legal — the order of the
-/// calls is the order on disk.
-Placed write_structure(const Builder& builder, const BuilderTileTableInfo& grid,
-                       const Metadata& m, bool metadata_first = true) {
-    Placed at{};
+/// Compose the tile table from the Builder's placements: the tile offsets,
+/// the layer extents, then the TILE_TABLE block naming both. Returns the
+/// TILE_TABLE's offset.
+Offset write_tile_table(const Builder& builder, const BuilderTileTableInfo& grid) {
     const auto tiles  = builder.tile_offsets();
     // The grid is the caller's; normalise the plane counts as set_tile_table does.
     const auto planes = grid.planes.empty()
@@ -124,14 +139,25 @@ Placed write_structure(const Builder& builder, const BuilderTileTableInfo& grid,
                            .Z_PLANES = planes[l]});
     const Offset tiles_at   = builder->append(b::TileOffsetsCreateInfo{.entries = tiles});
     const Offset extents_at = builder->append(b::LayerExtentsCreateInfo{.entries = extents});
-    at.table = builder->append(b::TileTableCreateInfo{
-        .ENCODING             = static_cast<::Iris::File::constants::TileEncodings>(grid.encoding),
-        .FORMAT               = static_cast<::Iris::File::constants::PixelFormats>(grid.format),
+    return builder->append(b::TileTableCreateInfo{
+        .ENCODING             = static_cast<k::TileEncodings>(grid.encoding),
+        .FORMAT               = static_cast<k::PixelFormats>(grid.format),
         .TILE_OFFSETS_OFFSET  = tiles_at,
         .LAYER_EXTENTS_OFFSET = extents_at,
         .X_EXTENT             = grid.extent.width,
         .Y_EXTENT             = grid.extent.height,
         .TILE_LENGTH          = grid.tileLength});
+}
+
+/// Place everything after the tiles and seal. `metadata_first` reserves the
+/// METADATA block right after the tile table and fills it once its children
+/// exist (Iris-Slide's order: fixed-size blocks ahead of the ones that change);
+/// otherwise METADATA is appended last. Either is legal — the order of the
+/// calls is the order on disk.
+Placed write_structure(const Builder& builder, const BuilderTileTableInfo& grid,
+                       const Metadata& m, bool metadata_first = true) {
+    Placed at{};
+    at.table = write_tile_table(builder, grid);
     if (metadata_first) at.metadata = builder->claim(b::METADATA::header_size);
     at.icc = builder->append(b::IccProfileCreateInfo{
         .bytes = reinterpret_cast<const BYTE*>(m.ICC_profile.data()),
@@ -366,27 +392,7 @@ int main() {
         IFE_CHECK(throws<std::invalid_argument>([&] { builder.finalize({}); }));
 
         // The caller composes the tile table from the placements.
-        const auto grid   = two_layers();
-        const auto tiles  = builder.tile_offsets();
-        const auto planes = grid.planes.empty()
-            ? std::vector<uint16_t>(grid.extent.layers.size(), 0) : grid.planes;
-        std::vector<b::LayerExtentEntry> extents;
-        extents.reserve(grid.extent.layers.size());
-        for (std::size_t l = 0; l < grid.extent.layers.size(); ++l)
-            extents.push_back({.X_TILES = grid.extent.layers[l].xTiles,
-                               .Y_TILES = grid.extent.layers[l].yTiles,
-                               .SCALE   = grid.extent.layers[l].scale,
-                               .Z_PLANES = planes[l]});
-        const Offset tiles_at   = builder->append(b::TileOffsetsCreateInfo{.entries = tiles});
-        const Offset extents_at = builder->append(b::LayerExtentsCreateInfo{.entries = extents});
-        const Offset table_at   = builder->append(b::TileTableCreateInfo{
-            .ENCODING             = static_cast<::Iris::File::constants::TileEncodings>(grid.encoding),
-            .FORMAT               = static_cast<::Iris::File::constants::PixelFormats>(grid.format),
-            .TILE_OFFSETS_OFFSET  = tiles_at,
-            .LAYER_EXTENTS_OFFSET = extents_at,
-            .X_EXTENT             = grid.extent.width,
-            .Y_EXTENT             = grid.extent.height,
-            .TILE_LENGTH          = grid.tileLength});
+        const Offset table_at    = write_tile_table(builder, two_layers());
         const Offset metadata_at = builder->append(empty_metadata);
         builder.finalize({.tileTable = table_at, .metadata = metadata_at});
         const FileAccessInfo at{builder->base(), builder.head()};
@@ -470,6 +476,149 @@ int main() {
         std::error_code ec;
         fs::remove(written, ec);
         fs::remove(moved, ec);
+    }
+
+    // ---- (i) PNG is retired: refused on write, still read ------------------ //
+    {
+        const Builder builder = Builder::create({.capacity = 1ULL << 20});
+        builder.set_tile_table(two_layers());
+        append_all(builder, 1);
+        const auto img = image_bytes();
+
+        // The application tier refuses a PNG associated image by name, before
+        // any byte or the label is taken.
+        AssociatedImageInfo png = label_image();
+        png.encoding = IMAGE_ENCODING_PNG;
+        Offset before = builder.head();
+        IFE_CHECK(throws_naming<std::invalid_argument>(
+            [&] { builder.append_image(png, img.data(), img.size()); }, "IMAGE_ENCODING_PNG"));
+        IFE_CHECK(builder.head() == before);
+        IFE_CHECK(builder.image_entries().empty());
+        builder.append_image(label_image(), img.data(), img.size());   // the label is still free
+
+        // The block tier refuses the entries that would put PNG on the wire,
+        // before it claims their space.
+        std::vector<b::ImageEntry> png_images = builder.image_entries();
+        png_images[0].ENCODING = k::ImageEncodings::IMAGE_ENCODING_PNG;
+        const b::ImagesCreateInfo legacy_images{.entries = png_images};
+        before = builder.head();
+        IFE_CHECK(throws_naming<std::invalid_argument>(
+            [&] { builder->append(legacy_images); }, "IMAGE_ENCODING_PNG"));
+        IFE_CHECK(builder.head() == before);
+
+        const std::vector<BYTE> mask(32, 0x5A);   // contents are not IFE's business
+        const Offset mask_at = builder->append(b::AnnotationBytesCreateInfo{
+            .bytes = mask.data(), .count = mask.size()});
+        const std::vector<b::AnnotationEntry> png_notes = {{
+            .IDENTIFIER   = 1,
+            .BYTES_OFFSET = mask_at,
+            .FORMAT       = k::AnnotationTypes::ANNOTATION_PNG,
+            .X_SIZE       = 16.f,
+            .Y_SIZE       = 16.f,
+            .PIXEL_WIDTH  = 4,
+            .PIXEL_HEIGHT = 8,
+            .PARENT_ID    = Abstraction::Annotation::NULL_ID}};
+        const b::AnnotationsCreateInfo legacy_notes{.entries = png_notes};
+        before = builder.head();
+        IFE_CHECK(throws_naming<std::invalid_argument>(
+            [&] { builder->append(legacy_notes); }, "ANNOTATION_PNG"));
+        IFE_CHECK(builder.head() == before);
+        const Offset claimed = builder->claim(b::size_of(legacy_notes));
+        IFE_CHECK(throws_naming<std::invalid_argument>(
+            [&] { builder->fill(claimed, legacy_notes); }, "ANNOTATION_PNG"));
+
+        // A writer from before the retirement stored both with the generated
+        // store(), which the Builder's refusal does not gate. The file it
+        // made validates, and both read back with their encoding.
+        const Offset notes_at = claimed;
+        IFE_CHECK(static_cast<bool>(b::store(builder->base(), notes_at, legacy_notes)));
+        const Offset images_at = builder->claim(b::size_of(legacy_images));
+        IFE_CHECK(static_cast<bool>(b::store(builder->base(), images_at, legacy_images)));
+        const Offset table_at    = write_tile_table(builder, two_layers());
+        const Offset metadata_at = builder->append(b::MetadataCreateInfo{
+            .IMAGES_OFFSET      = images_at,
+            .ANNOTATIONS_OFFSET = notes_at});
+        builder.finalize({.tileTable = table_at, .metadata = metadata_at});
+
+        const FileAccessInfo at{builder->base(), builder.head()};
+        IFE_CHECK(validate_file_structure(at).succeeded());
+        const Parser parser(at);
+        const Abstraction::File& file = parser.abstraction();
+        const auto image = file.images.find("label");
+        IFE_CHECK(image != file.images.end() && image->second.info.encoding == IMAGE_ENCODING_PNG);
+        const auto stream = parser.image("label");
+        IFE_CHECK(stream.size() == img.size() &&
+                  std::memcmp(stream.data(), img.data(), img.size()) == 0);
+        const auto note = file.annotations.find(1);
+        IFE_CHECK(note != file.annotations.end() && note->second.type == ANNOTATION_PNG);
+        IFE_CHECK(note != file.annotations.end() && note->second.byteSize == mask.size());
+    }
+
+    // ---- (j) the clinical stream ------------------------------------------- //
+    {
+        // A FHIR Bundle as JSON text. Its contents are not IFE's business; the
+        // stream is carried byte for byte with its declared encoding.
+        const std::string fhir =
+            R"({"resourceType":"Bundle","type":"collection","entry":[{"resource":)"
+            R"({"resourceType":"Patient","id":"p1","name":[{"family":"Doe"}]}}]})";
+        const auto* json = reinterpret_cast<const BYTE*>(fhir.data());
+
+        const Builder builder = Builder::create({.capacity = 1ULL << 20});
+        builder.set_tile_table(two_layers());
+        append_all(builder, 1);
+        const Offset table_at    = write_tile_table(builder, two_layers());
+        // Iris-Slide's order: METADATA reserved early and filled once the
+        // blocks it names exist.
+        const Offset metadata_at = builder->claim(b::METADATA::header_size);
+
+        Offset before = builder.head();
+        IFE_CHECK(throws_naming<std::invalid_argument>([&] {
+            builder.append_clinical(k::ClinicalEncodings::CLINICAL_UNDEFINED, json, fhir.size()); },
+            "CLINICAL_UNDEFINED"));
+        IFE_CHECK(throws_naming<std::invalid_argument>([&] {
+            builder.append_clinical(static_cast<k::ClinicalEncodings>(9), json, fhir.size()); },
+            "encoding 9"));
+        IFE_CHECK(throws_naming<std::invalid_argument>([&] {
+            builder.append_clinical(k::ClinicalEncodings::CLINICAL_FHIR_JSON, json, 0); },
+            "empty"));
+        IFE_CHECK(builder.head() == before);
+
+        const Offset clinical_at =
+            builder.append_clinical(k::ClinicalEncodings::CLINICAL_FHIR_JSON, json, fhir.size());
+        before = builder.head();
+        IFE_CHECK(throws_naming<std::logic_error>([&] {
+            builder.append_clinical(k::ClinicalEncodings::CLINICAL_HL7_V2, json, fhir.size()); },
+            "CLINICAL_HL7_V2 refused; the file's one clinical stream is at offset " +
+                std::to_string(clinical_at)));
+        IFE_CHECK(builder.head() == before);
+
+        // A METADATA naming some other block as its clinical stream would
+        // orphan the one written.
+        IFE_CHECK(throws_naming<std::invalid_argument>([&] {
+            builder->fill(metadata_at, b::MetadataCreateInfo{.CLINICAL_OFFSET = table_at}); },
+            std::to_string(clinical_at)));
+        // The header must name the METADATA that names the stream.
+        const Offset unfilled = builder->claim(b::METADATA::header_size);
+        IFE_CHECK(throws_naming<std::logic_error>([&] {
+            builder.finalize({.tileTable = table_at, .metadata = unfilled}); },
+            std::to_string(clinical_at)));
+        // Left NULL_OFFSET, the Builder names the stream it wrote.
+        builder->fill(metadata_at, b::MetadataCreateInfo{.MICRONS_PIXEL = 0.25f});
+        IFE_CHECK(throws_naming<std::logic_error>([&] {
+            builder.append_clinical(k::ClinicalEncodings::CLINICAL_HL7_V2, json, fhir.size()); },
+            "METADATA"));
+        builder.finalize({.tileTable = table_at, .metadata = metadata_at});
+
+        const FileAccessInfo at{builder->base(), builder.head()};
+        IFE_CHECK(validate_file_structure(at).succeeded());
+        const Abstraction::File file = Parser(at).abstraction();
+        IFE_CHECK(file.clinicalEncoding ==
+                  static_cast<uint8_t>(k::ClinicalEncodings::CLINICAL_FHIR_JSON));
+        IFE_CHECK(file.clinicalOffset == clinical_at + b::CLINICAL_METADATA::header_size);
+        IFE_CHECK(file.clinicalSize == fhir.size());
+        IFE_CHECK(file.clinicalSize == fhir.size() && file.clinicalOffset <= at.file_size &&
+                  at.file_size - file.clinicalOffset >= fhir.size() &&
+                  std::memcmp(at.file_ptr + file.clinicalOffset, json, fhir.size()) == 0);
     }
 
     if (g_failures == 0) std::printf("ife_builder_layered_tests: PASS\n");

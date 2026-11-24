@@ -35,12 +35,27 @@
         "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
         "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
       }
+    },
+    {
+      "name": "big-endian",
+      "displayName": "s390x cross build under QEMU (build-big-endian)",
+      "description": "The big-endian build: cross-compiles for s390x and runs every test binary under qemu-s390x (cmake/toolchains/s390x-linux-gnu.cmake). Needs the host packages g++-s390x-linux-gnu and qemu-user.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-big-endian",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/s390x-linux-gnu.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "IFE_BUILD_TESTS": "ON",
+        "IFE_RUN_GENERATOR": "ON",
+        "IFE_HOST_BYTE_ORDER": "big"
+      }
     }
   ],
   "buildPresets": [
     { "name": "xcode", "configurePreset": "xcode", "configuration": "Debug" },
     { "name": "ninja", "configurePreset": "ninja" },
-    { "name": "asan",  "configurePreset": "asan" }
+    { "name": "asan",  "configurePreset": "asan" },
+    { "name": "big-endian", "configurePreset": "big-endian" }
   ],
   "testPresets": [
     {
@@ -52,6 +67,22 @@
       "name": "asan",
       "configurePreset": "asan",
       "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "big-endian",
+      "configurePreset": "big-endian",
+      "output": { "outputOnFailure": true }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "big-endian",
+      "displayName": "Configure, build and test on s390x under QEMU",
+      "steps": [
+        { "type": "configure", "name": "big-endian" },
+        { "type": "build",     "name": "big-endian" },
+        { "type": "test",      "name": "big-endian" }
+      ]
     }
   ]
 }
