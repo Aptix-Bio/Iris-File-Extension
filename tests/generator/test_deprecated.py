@@ -6,8 +6,8 @@ value is never reused. `deprecated` records the version that retired it and
 why. This pins four things:
 
   * the committed schema retires IMAGE_ENCODING_PNG and ANNOTATION_PNG at 1.1
-    (Ryan, 2026-11-24: "SVG preferred and let's just cut the PNG then. Simple
-    is better.");
+    (decided 2026-11-24, so readers and writers implement fewer encodings;
+    SVG is the preferred annotation encoding);
   * `validate()` refuses a malformed retirement -- no reason, a version that
     does not parse, one newer than the document or older than the member
     itself, or a key outside the closed vocabulary;
