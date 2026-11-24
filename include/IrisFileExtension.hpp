@@ -345,8 +345,8 @@ class Builder_t;   ///< the write BODY — defined in "IFE_Builder.hpp"
  * names the file and moves it once `finalize` returns.
  *
  * Usage: `create` → `set_tile_table` → `append_tile` / `append_null_tile` for
- * every tile (any order, any threads) and `append_image` per associated image
- * → compose the structure in the order you choose through the block tier
+ * every tile (any order, any threads), `append_image` per associated image
+ * and at most one `append_clinical` → compose the structure in the order you choose through the block tier
  * (`builder->append` / `claim` + `fill`), building the tile offsets from
  * `tile_offsets()` and the images array from `image_entries()` → `finalize`
  * with the tile table and metadata offsets.
@@ -403,6 +403,27 @@ public:
      *          or a label already appended. A refused image writes nothing. */
     Offset append_image(const AssociatedImageInfo& info, const BYTE* data, Size size) const;
 
+    /**
+     * @brief Write the file's clinical metadata stream (HL7 v2, FHIR as JSON,
+     *        or FastFHIR) as one CLINICAL_METADATA block, and return its offset.
+     *
+     * The stream is the only place patient identity belongs (spec
+     * ife-clinical-metadata); dropping it de-identifies the slide. The bytes
+     * are carried unmodified and never parsed. METADATA names the stream: a
+     * METADATA filled afterwards through the block tier with CLINICAL_OFFSET
+     * left NULL_OFFSET is stored naming this block, so call this before
+     * filling METADATA (claim METADATA early if it must sit earlier on disk).
+     * Thread-safe.
+     *
+     * @throws std::invalid_argument for CLINICAL_UNDEFINED or a value
+     *         clinical_encodings does not define, an empty stream, or one
+     *         past the u32 COUNT; std::logic_error for a second stream (the
+     *         message names the first's offset), a stream after METADATA was
+     *         filled, or after `finalize`. A refused stream writes nothing.
+     */
+    Offset append_clinical(constants::ClinicalEncodings encoding, const BYTE* data,
+                           Size size) const;
+
     // The structure blocks are the caller's to compose: the Builder placed the
     // tiles and the images, so it reports what it placed, and the caller names
     // each block (TileOffsetsCreateInfo, LayerExtentsCreateInfo, …) and its
@@ -433,7 +454,9 @@ public:
      * written size, leaving it closed for the caller to move. After this the
      * builder accepts no more writes. Call it once every append has joined.
      * @throws std::invalid_argument, before any write, if either root is
-     *         NULL_OFFSET.
+     *         NULL_OFFSET; std::logic_error if a clinical stream was appended
+     *         and @p info names a METADATA the Builder did not fill, which
+     *         would leave the stream unreferenced.
      */
     void finalize(const BuilderFinalizeInfo& info) const;
 

@@ -98,7 +98,7 @@ FastFHIR's `ff.Memory` / `ff.Builder` the same way.
 | Concept | FastFHIR | IFE |
 |---|---|---|
 | make a writer | `FF_CreateBuilder({capacity, filepath, …})`; body `Builder_t(Memory, …)` | `Builder::create({capacity, filepath, tile_frames})`; body `Builder_t(Memory, info)` |
-| write a block at the head, get its offset | `builder->append(T)` | `builder->append(XxxCreateInfo)`; `append_tile` / `append_image` for the streams |
+| write a block at the head, get its offset | `builder->append(T)` | `builder->append(XxxCreateInfo)`; `append_tile` / `append_image` / `append_clinical` for the streams |
 | report what the writer placed | the offsets `append` returns | `tile_offsets()`, `image_entries()` — the caller composes TILE_OFFSETS and IMAGES from them |
 | read the stream being built | `Builder_t::query()` → `Parser` | `query()` → `Parser` |
 | reserve raw space | `claim_child_space(bytes)` | `builder->claim(bytes)` |

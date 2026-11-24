@@ -23,6 +23,11 @@
  *     associated image or annotation, naming the encoding, and writes
  *     nothing; a file a pre-retirement writer produced still validates and
  *     reads.
+ *   - The clinical stream: `append_clinical` writes one CLINICAL_METADATA
+ *     block, METADATA names it, and the stream reads back byte-exact with
+ *     its encoding; a second stream, an undefined encoding, an empty stream,
+ *     a METADATA naming another offset, and a stream after METADATA are each
+ *     refused by name and write nothing.
  *
  * Self-contained (no framework). Non-zero exit on failure.
  */
@@ -547,6 +552,73 @@ int main() {
         const auto note = file.annotations.find(1);
         IFE_CHECK(note != file.annotations.end() && note->second.type == ANNOTATION_PNG);
         IFE_CHECK(note != file.annotations.end() && note->second.byteSize == mask.size());
+    }
+
+    // ---- (j) the clinical stream ------------------------------------------- //
+    {
+        // A FHIR Bundle as JSON text. Its contents are not IFE's business; the
+        // stream is carried byte for byte with its declared encoding.
+        const std::string fhir =
+            R"({"resourceType":"Bundle","type":"collection","entry":[{"resource":)"
+            R"({"resourceType":"Patient","id":"p1","name":[{"family":"Doe"}]}}]})";
+        const auto* json = reinterpret_cast<const BYTE*>(fhir.data());
+
+        const Builder builder = Builder::create({.capacity = 1ULL << 20});
+        builder.set_tile_table(two_layers());
+        append_all(builder, 1);
+        const Offset table_at    = write_tile_table(builder, two_layers());
+        // Iris-Slide's order: METADATA reserved early and filled once the
+        // blocks it names exist.
+        const Offset metadata_at = builder->claim(b::METADATA::header_size);
+
+        Offset before = builder.head();
+        IFE_CHECK(throws_naming<std::invalid_argument>([&] {
+            builder.append_clinical(k::ClinicalEncodings::CLINICAL_UNDEFINED, json, fhir.size()); },
+            "CLINICAL_UNDEFINED"));
+        IFE_CHECK(throws_naming<std::invalid_argument>([&] {
+            builder.append_clinical(static_cast<k::ClinicalEncodings>(9), json, fhir.size()); },
+            "encoding 9"));
+        IFE_CHECK(throws_naming<std::invalid_argument>([&] {
+            builder.append_clinical(k::ClinicalEncodings::CLINICAL_FHIR_JSON, json, 0); },
+            "empty"));
+        IFE_CHECK(builder.head() == before);
+
+        const Offset clinical_at =
+            builder.append_clinical(k::ClinicalEncodings::CLINICAL_FHIR_JSON, json, fhir.size());
+        before = builder.head();
+        IFE_CHECK(throws_naming<std::logic_error>([&] {
+            builder.append_clinical(k::ClinicalEncodings::CLINICAL_HL7_V2, json, fhir.size()); },
+            "CLINICAL_HL7_V2 refused; the file's one clinical stream is at offset " +
+                std::to_string(clinical_at)));
+        IFE_CHECK(builder.head() == before);
+
+        // A METADATA naming some other block as its clinical stream would
+        // orphan the one written.
+        IFE_CHECK(throws_naming<std::invalid_argument>([&] {
+            builder->fill(metadata_at, b::MetadataCreateInfo{.CLINICAL_OFFSET = table_at}); },
+            std::to_string(clinical_at)));
+        // The header must name the METADATA that names the stream.
+        const Offset unfilled = builder->claim(b::METADATA::header_size);
+        IFE_CHECK(throws_naming<std::logic_error>([&] {
+            builder.finalize({.tileTable = table_at, .metadata = unfilled}); },
+            std::to_string(clinical_at)));
+        // Left NULL_OFFSET, the Builder names the stream it wrote.
+        builder->fill(metadata_at, b::MetadataCreateInfo{.MICRONS_PIXEL = 0.25f});
+        IFE_CHECK(throws_naming<std::logic_error>([&] {
+            builder.append_clinical(k::ClinicalEncodings::CLINICAL_HL7_V2, json, fhir.size()); },
+            "METADATA"));
+        builder.finalize({.tileTable = table_at, .metadata = metadata_at});
+
+        const FileAccessInfo at{builder->base(), builder.head()};
+        IFE_CHECK(validate_file_structure(at).succeeded());
+        const Abstraction::File file = Parser(at).abstraction();
+        IFE_CHECK(file.clinicalEncoding ==
+                  static_cast<uint8_t>(k::ClinicalEncodings::CLINICAL_FHIR_JSON));
+        IFE_CHECK(file.clinicalOffset == clinical_at + b::CLINICAL_METADATA::header_size);
+        IFE_CHECK(file.clinicalSize == fhir.size());
+        IFE_CHECK(file.clinicalSize == fhir.size() && file.clinicalOffset <= at.file_size &&
+                  at.file_size - file.clinicalOffset >= fhir.size() &&
+                  std::memcmp(at.file_ptr + file.clinicalOffset, json, fhir.size()) == 0);
     }
 
     if (g_failures == 0) std::printf("ife_builder_layered_tests: PASS\n");

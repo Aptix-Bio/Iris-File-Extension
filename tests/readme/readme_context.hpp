@@ -42,6 +42,7 @@ extern Iris::Extent                    extent;
 extern std::uint32_t                   blank;
 extern std::vector<Iris::BYTE>         jpeg;
 extern std::vector<Iris::BYTE>         thumbnail;
+extern std::vector<Iris::BYTE>         fhir_bundle;
 extern Iris::File::AssociatedImageInfo thumbnail_info;
 extern Iris::File::Metadata            metadata;
 

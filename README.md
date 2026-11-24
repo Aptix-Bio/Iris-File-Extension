@@ -122,7 +122,7 @@ std::span<const BYTE> stream   = parser.tile(layer, tile); // zero-copy; empty =
 `validate_file_structure` deep-validates the offset graph and bounds-checks every tile entry. `abstraction()` and `abstract_file_structure` check every block they read — both witnesses, and every length the block declares — and throw `std::runtime_error` on a structurally damaged file rather than reading it. They never return values they could not verify, and never repair; to reopen a damaged file, see [Recovering a Damaged File](#recovering-a-damaged-file). A caller that maps the file itself can bind a Parser to that mapping instead — `Parser({ptr, size})` borrows it — or call the free functions `validate_file_structure` / `abstract_file_structure` directly.
 
 ### Writing a Slide
-The Builder controls how the stream is mutated — it claims space at the head and fills it — and your encoder decides everything else, the layout included: every `append_*` lands where the head is when you call it, so the order of your calls is the order on disk. Declare the tile pyramid, append every tile (from any number of threads, in any order) and the associated images, then compose the structure — tile table, images array, attributes, METADATA — from the grid you declared and the Builder's report of what it placed (`tile_offsets`, `image_entries`), and `finalize` with the two roots. The Builder frames each tile stream by default (and always on a Z-stacked layer), refuses to report placements while any tile is unaccounted for, and leaves a complete, closed file. A block you want early but can only fill later (METADATA names the blocks after it) is `claim`ed early and `fill`ed once they exist.
+The Builder controls how the stream is mutated — it claims space at the head and fills it — and your encoder decides everything else, the layout included: every `append_*` lands where the head is when you call it, so the order of your calls is the order on disk. Declare the tile pyramid, append every tile (from any number of threads, in any order), the associated images and, optionally, the clinical stream, then compose the structure — tile table, images array, attributes, METADATA — from the grid you declared and the Builder's report of what it placed (`tile_offsets`, `image_entries`), and `finalize` with the two roots. The Builder frames each tile stream by default (and always on a Z-stacked layer), refuses to report placements while any tile is unaccounted for, and leaves a complete, closed file. A block you want early but can only fill later (METADATA names the blocks after it) is `claim`ed early and `fill`ed once they exist.
 <!-- ife-compile: fragment -->
 ```cpp
 #include "IrisFileExtension.hpp"
@@ -147,6 +147,12 @@ builder.append_tile(layer, tile, jpeg.data(), jpeg.size());
 builder.append_null_tile(layer, blank);  // no tile at this position (NULL_TILE)
 
 builder.append_image(thumbnail_info, thumbnail.data(), thumbnail.size());
+
+// Patient identity goes in the clinical stream and nowhere else: dropping it
+// de-identifies the slide. Optional, one per file, appended before METADATA
+// is filled, since METADATA names it.
+builder.append_clinical(constants::ClinicalEncodings::CLINICAL_FHIR_JSON,
+                        fhir_bundle.data(), fhir_bundle.size());
 
 // The layout is yours. The grid is the `table` you declared above; the
 // Builder reports where it placed the tiles (`tile_offsets`). Name each block
@@ -174,7 +180,7 @@ const Offset table_at   = builder->append(b::TileTableCreateInfo{
 const Offset metadata_at = builder->claim(b::METADATA::header_size);
 const auto   images      = builder.image_entries();
 const Offset images_at   = builder->append(b::ImagesCreateInfo{.entries = images});
-builder->fill(metadata_at, b::MetadataCreateInfo{
+builder->fill(metadata_at, b::MetadataCreateInfo{   // CLINICAL_OFFSET: the Builder names the stream
     .ATTRIBUTES_OFFSET = constants::NULL_OFFSET,   // attributes omitted here
     .IMAGES_OFFSET     = images_at,
     .MICRONS_PIXEL     = metadata.micronsPerPixel});

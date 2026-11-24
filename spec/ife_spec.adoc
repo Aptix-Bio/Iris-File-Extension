@@ -462,6 +462,10 @@ unversioned claim is free text by definition, naming no specification to
 adhere to.
 * SIZES_OFFSET *shall* encode a valid offset to the attribute sizes array.
 * BYTES_OFFSET *shall* encode a valid offset to the attribute byte array.
+* Patient identity *shall not* be written to the attribute arrays under any
+  FORMAT; it belongs only in the clinical metadata stream
+  (<<ife-clinical-metadata>>). Under METADATA_I2S the arrays hold only facts
+  of the slide fixed when it was scanned.
 
 The IFE is not intended to validate clinical interoperability metadata
 specification conformance; that is outside the scope of this specification.
@@ -480,7 +484,8 @@ clinical DICOM metadata) may still be encoded in the __optional__
 NOTE: If DICOM tags are used in these laboratory attributes fields, we recommend
 still adhering to proper data province and including only acquisition information specific to
 WSI files (such as objective or stain type, for example). We recommend shifting
-clinical data such as patient identifiers or diagnoses to the <<ife-clinical-metadata>>.
+other clinical data, such as diagnoses, to the <<ife-clinical-metadata>> as well;
+patient identifiers are required there by the clause above.
 
 The names and admissibility of those pairs are specified separately, by the
 Iris Interoperability Specification (I2S), which states that a key is a DICOM-like
@@ -841,8 +846,10 @@ include::{generated}/constants/clinical_encodings.adoc[]
 * The stream itself is not interpreted by this specification, which records
   only its encoding, where its bytes begin, and how many there are.
 
-Setting CLINICAL_OFFSET to NULL_OFFSET and dropping this block de-identifies
-a slide. No other block is affected and no pixel data is rewritten.
+Patient identity *shall* be carried in this stream and in no other block of
+the file. Setting CLINICAL_OFFSET to NULL_OFFSET and dropping this block
+therefore de-identifies a slide. No other block is affected and no pixel data
+is rewritten.
 
 IMPORTANT: An encoder declaring METADATA_I2S undertakes that its attribute
 arrays hold acquisition information only. Clinical and identifying data
