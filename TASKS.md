@@ -138,7 +138,7 @@ decision is that workflows stay simple and streamlined. Labels from
 
 ---
 
-## CI-2 — The big-endian job runs on Blacksmith without Docker (done; downstream owes a green run)
+## CI-2 — The big-endian job runs on Blacksmith without Docker (done)
 
 **Filed 2026-11-24.** After the move to Blacksmith (CI-1), the `big-endian (s390x)`
 job failed in 22 seconds (run 45440640914, job 138610470770) before compiling
@@ -186,9 +186,54 @@ ran under QEMU. Actions in the job are pinned by commit SHA.
       install and the job itself are proved only by the CI run.
 - [x] CI-2.3 **VERIFY:** `big-endian (s390x)` green on PR #1 (run 45447197501,
       job 138634119321: 26 of 26 tests under emulation; the job took 2 min 46 s).
-- [ ] CI-2.4 **Downstream.** The same run failed `Iris-Slide builds against this
-      branch` at configure with "Could not find nasm": Iris-Slide merged its
-      vcpkg build (Iris-Slide cc17fb3) between run 45440640914 and this one, and
-      vcpkg's aom port needs NASM from the host. The job's apt line now adds
-      `nasm` and `pkg-config`, the tools Iris-Slide's own `_build.yml` installs.
-      Owes its green run.
+- [x] CI-2.4 **Downstream.** Green in run 45448367106 at [bcf1eb6](https://github.com/Aptix-Bio/Iris-File-Extension/commit/bcf1eb6176604c598bfd6ee4da04c75085ff280e)
+      (job 138638305129, `Iris-Slide builds against this branch`, 3 min 54 s,
+      on PR #1, 2026-11-24; every job in that run passed). Run 45447197501 had
+      failed this job at configure with "Could not find nasm": Iris-Slide
+      merged its vcpkg build (Iris-Slide cc17fb3) between run 45440640914 and
+      that one, and vcpkg's aom port needs NASM from the host. The job's apt
+      line now adds `nasm` and `pkg-config`, the tools Iris-Slide's own
+      `_build.yml` installs.
+
+---
+
+## CI-3 — The Aptix governance review bot reviews every pull request (done; owes its first review run)
+
+**Filed 2026-11-24.** Every non-draft pull request from a branch of this
+repository is reviewed by the Aptix review bot against
+`.github/review/rubric.toml`, the same design as Iris-Headers and Iris-Slide
+use. The bot lives in the private Aptix-Bio/governance repository; a public
+repository cannot name a private repository's action in `uses:` ("Access is
+allowed only from private repositories",
+https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository,
+read 2026-11-24), so each job checks the bot out at a pinned commit
+(`eea566a60b93920050c30bfce901e250668186a1`) with `GOVERNANCE_READ_TOKEN` and
+runs it from `./governance/review-bot`.
+
+**Design.** `.github/workflows/review.yml` runs on `pull_request_target`
+(the workflow and `github.sha` come from the default branch:
+https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows,
+read 2026-11-24) with `permissions: {}` and two jobs: `review` holds
+`ANTHROPIC_KEY` with contents and pull-requests read only; `code-review` has
+pull-requests write and never sees the key. Neither checks out, builds or runs
+the pull request's head; the rubric, the documents it names and CODEOWNERS
+are read from the default branch, so a pull request cannot change the rules it
+is judged by (https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target,
+read 2026-11-24). A fork's pull request gets a notice saying why it is not
+reviewed. Each job first names any missing secret
+(`cmake/require_settings.cmake`) without printing its value. Actions are
+pinned by full SHA (actions/checkout v7.0.1, actions/cache v6.1.0,
+actions/upload-artifact v7.0.2, actions/download-artifact v8.0.2, each tag
+read with `git ls-remote` 2026-11-24) and run on `blacksmith-2vcpu-ubuntu-2404`.
+The rules the bot judges by are `development/style_guide.md` and
+`development/ci_runners.md`, added here, with IFE's own planning and
+specification documents.
+
+- [x] CI-3.1 **Red first.** `cmake/check_review_configuration.cmake`, run by the `spec` job, fails on any change that would let `review.yml` run a pull request's code, widen a job's token, move a secret or unpin an action. Evidence: exit 1 at the test's own commit, naming the four missing files.
+- [x] CI-3.2 **Green.** The workflow, rubric, CODEOWNERS and pull request template added; the check exits 0. actionlint 1.7.12 reports only the three shellcheck notes `main` already had; `tools/runner_labels_lint.py` and `tools/portability_lint.py` pass.
+- [x] CI-3.3 **The rubric loads in the pinned bot.** `load_rubric` and `code_owners` at the pinned governance commit (Python 3.15.2, its hash-pinned requirements): 13 items, 12 blocking and Documentation advisory; `[trace]` on TASKS.md and MIGRATION.md; the owners on CODEOWNERS' catch-all line; all 13 reference files present.
+- [ ] CI-3.4 **VERIFY:** the first review run, on the first pull request
+      opened after this merges (`pull_request_target` runs the default
+      branch's workflow, so this pull request gets none).
+- [ ] CI-3.5 **Required check.** Making `2. Update PR from Agent` a required
+      status check on `main` is a repository setting for the maintainer.
