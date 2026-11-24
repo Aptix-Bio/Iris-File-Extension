@@ -62,6 +62,11 @@ jobs:
       - uses: actions/checkout@v7
       - name: Every job on a pinned Blacksmith runner
         run: python3 tools/runner_labels_lint.py
+      # CI-3: review.yml runs under pull_request_target with the model key;
+      # this fails a change that would let it check out or run a pull
+      # request's code, widen a job's token, or move a secret.
+      - name: The review bot's workflow stays safe under pull_request_target
+        run: cmake -P cmake/check_review_configuration.cmake
       - run: python3 -m generator --validate
       - run: python3 -m generator
       - run: python3 -m generator --check
