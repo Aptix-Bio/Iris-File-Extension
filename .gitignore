@@ -46,7 +46,7 @@ tests/fixtures/corpus/
 # Handoff documents, at any depth. These are working notes between sessions —
 # a record of what was measured and what fooled us, superseded the moment the
 # next session measures again. They are never part of the repository: what
-# survives a handoff belongs in MIGRATION.md, CLAUDE.md, or a test that
+# survives a handoff belongs in development/, CLAUDE.md, or a test that
 # asserts it. Ignored rather than merely uncommitted so `git add -A` cannot
 # quietly promote one to a permanent document.
 *handoff*.md

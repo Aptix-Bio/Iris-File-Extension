@@ -1,4 +1,4 @@
-# CI-3 (TASKS.md; development/ci_runners.md, Settings): a job that needs repository or organization
+# CI-3 (development/WBS.md; development/ci_runners.md, Settings): a job that needs repository or organization
 # variables or secrets fails first, naming each one that is missing, instead of failing later
 # inside an action whose message does not say which setting to create.
 #

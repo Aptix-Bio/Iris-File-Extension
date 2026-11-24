@@ -1,11 +1,11 @@
 <!--
-Iris-File-Extension pull request. Fill each section from TASKS.md and MIGRATION.md, which hold the
-work items. Write "None" in a section that does not apply; never delete one. The review bot reads
+Iris-File-Extension pull request. Fill each section from development/WBS.md and development/RTM.md,
+which hold the work items and the requirements. Write "None" in a section that does not apply; never delete one. The review bot reads
 this description as data and checks it against the diff (.github/review/rubric.toml).
 
 "Agent review" at the bottom is not yours to tick: the review bot rewrites it on every run. A pull
 request from a fork gets no model review; a maintainer reviews it.
-Branch name: <kind>/<WorkPackage>_<n>, after a TASKS.md or MIGRATION.md work item, e.g.
+Branch name: <kind>/<WorkPackage>_<n>, after a development/WBS.md work item, e.g.
 feature/ReviewBot_CI-3.
 -->
 
@@ -15,8 +15,9 @@ feature/ReviewBot_CI-3.
 
 ## Work items
 
-<!-- TASKS.md or MIGRATION.md work items completed or advanced, as numbered there. Tick only steps
-whose evidence is on the same line, with a link to the commit that did the work. -->
+<!-- development/WBS.md work items completed or advanced, and the RTM rows touched, as numbered
+there. Tick only steps whose evidence is on the same line, with a link to the commit that did the
+work. -->
 
 - **_ID_** — _title_
   - [x] _ID.n_ — _evidence_ — [_1234567_](https://github.com/Aptix-Bio/Iris-File-Extension/commit/_full-hash_)

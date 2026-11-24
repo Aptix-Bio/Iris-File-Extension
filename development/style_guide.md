@@ -3,12 +3,12 @@
 Binding conventions for Iris-File-Extension's code and plans: the C++20
 headers under `include/`, the runtime sources under `src/`, the generator
 under `generator/`, the specification under `spec/`, their tests, and the
-CMake and Bazel builds. The work items live in [TASKS.md](../TASKS.md) and
-[MIGRATION.md](../MIGRATION.md), the layering in
-[architecture.md](../architecture.md), the design notes in
+CMake and Bazel builds. The work items live in [WBS.md](WBS.md), the
+layering and decisions in [ARCHITECTURE.md](ARCHITECTURE.md), the pipeline
+rules in [PIPELINE.md](PIPELINE.md), the design notes in
 [CLAUDE.md](../CLAUDE.md) and the wire contract in
 [CONTRIBUTING.md](../CONTRIBUTING.md); where they are more specific than this
-guide, they win. Adopted 2026-11-24 (CI-3, TASKS.md) from the style guide the
+guide, they win. Adopted 2026-11-24 (CI-3, [WBS.md](WBS.md)) from the style guide the
 maintainer keeps for the Iris repositories, with the references to other
 projects removed, so that the review bot (`.github/review/rubric.toml`) judges
 a pull request against rules this repository carries.
@@ -212,9 +212,8 @@ using Buffer = std::shared_ptr<Buffer_t>;    // what everyone holds
 The `_t` types live in a namespace (`Iris`), outside the global names POSIX
 reserves for its own `_t` types.
 
-Work items are named as TASKS.md and MIGRATION.md number them (`CI-2.4`,
-`VL-1.1`, `RC-10`), and a branch is `<kind>/<WorkPackage>_<n>` after one of
-them.
+Work items are named as [WBS.md](WBS.md) numbers them (`CI-2.4`, `VL-1.1`,
+`RC-10`), and a branch is `<kind>/<WorkPackage>_<n>` after one of them.
 
 ## Writing
 

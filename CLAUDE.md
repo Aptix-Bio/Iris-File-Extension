@@ -239,7 +239,8 @@ bits→percent curve; the rebuild's bench must assert it too.
   recovery engine Bazel was not compiling at all.
 
 Handoff documents (`*handoff*.md`) are working notes and are **gitignored**.
-What survives a handoff belongs in `MIGRATION.md`, here, or in a test.
+What survives a handoff belongs in `development/` (the WBS, ARCHITECTURE.md or
+`development/analysis/`), here, or in a test.
 
 ## The Builder lays bytes down; it does not run the application
 

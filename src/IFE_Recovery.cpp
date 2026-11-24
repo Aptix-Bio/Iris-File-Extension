@@ -1,9 +1,9 @@
 /**
  * @file IFE_Recovery.cpp
- * @brief The recovery census (MIGRATION.md RB-3).
+ * @brief The recovery census (development/WBS.md, RB-3).
  * @copyright Iris Developers, 2025-2026
  *
- * A port of FastFHIR's census (`../FastFHIR/src/FF_Recovery.cpp`, "PHASE 1",
+ * A port of FastFHIR's census (its `src/FF_Recovery.cpp`, "PHASE 1",
  * and `recovery_algorithm_handoff.md` §6). It reads top to bottom as that file
  * does: policy and leaf reads, the board, the census, then the producers. The
  * two formats share the witnesses -- a block's VALIDATION holds its own offset
@@ -660,7 +660,7 @@ Recovery::Census Recovery::census() const {
 // A tile stream has no self-offset, so it is charged to the self-validating
 // tile offsets entry that names it, with its frame where one holds. The frame
 // SEARCH -- frames of streams whose entries are lost -- is the solver's
-// (MIGRATION.md RB-6): a bare 40-bit self-offset is too weak to scan for.
+// (development/WBS.md, RB-6): a bare 40-bit self-offset is too weak to scan for.
 FileMap Recovery::scan() const {
     FileMap map;
     map.file_size = m_size;

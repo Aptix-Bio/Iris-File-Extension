@@ -2,7 +2,7 @@
 
 How Iris-File-Extension uses CI runners (GitHub Actions on Blacksmith's
 runners). Read it before writing or changing a workflow. Adopted 2026-11-24
-(CI-3, TASKS.md) from the runner rules the maintainer keeps for the Iris
+(CI-3, [WBS.md](WBS.md)) from the runner rules the maintainer keeps for the Iris
 repositories, so that the review bot judges a workflow change against rules
 this repository carries. The jobs in `.github/workflows/ci.yml` that predate
 these rules (CI-1, CI-2) move to them as their work items come up; a new or
@@ -17,7 +17,7 @@ same work twice. Modular reuse and frequent cache hits are the two levers.
   never for docs-only changes. A new commit cancels its PR's running run.
 - **Cheapest first.** Gate the costly OS on the
   cheap ones passing (`needs:`; a macOS minute bills as twenty 2-vCPU Linux
-  minutes, TASKS.md CI-1.4), and gate a job on the jobs whose output it
+  minutes, WBS.md CI-1.4), and gate a job on the jobs whose output it
   uses.
 - **Prove it locally first.** A build or script runs locally, in a container
   for other OSes and architectures, before it spends a runner. Check that the

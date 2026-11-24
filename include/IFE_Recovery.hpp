@@ -1,6 +1,6 @@
 /**
  * @file IFE_Recovery.hpp
- * @brief Iris File Extension recovery: the census (MIGRATION.md RB-3).
+ * @brief Iris File Extension recovery: the census (development/WBS.md, RB-3).
  * @copyright Iris Developers, 2025-2026
  *
  * This header also carries the file map the census works over — the
@@ -8,7 +8,7 @@
  * the graph walk (`generate_file_map`). Those are recovery's substrate, not a
  * separate "advanced" tier, so the recovery surface is ONE header.
  *
- * The engine is FastFHIR's (`../FastFHIR/src/FF_Recovery.cpp`,
+ * The engine is FastFHIR's (its `src/FF_Recovery.cpp` and
  * `recovery_algorithm_handoff.md`): a byte census first, then cycles that
  * decide whole branches. This revision holds the census.
  *
@@ -73,7 +73,7 @@ enum IFE_EXPORT MapEntryType {
     MAP_ENTRY_TILE_FRAME,
 };
 
-/// Why a run of bytes belongs to no file-map entry (MIGRATION.md RC-2.3).
+/// Why a run of bytes belongs to no file-map entry (RC-2.3; development/WBS.md, closed work).
 enum class IFE_EXPORT GapClass : uint8_t {
     Hole = 0,        ///< unattributed, and large enough to have been a block.
                      ///< A block whose VALIDATION AND parent reference are

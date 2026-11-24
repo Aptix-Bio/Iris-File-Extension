@@ -1,4 +1,4 @@
-# CI-3 (TASKS.md): the review bot's workflow keeps the
+# CI-3 (development/WBS.md): the review bot's workflow keeps the
 # safety properties that make `pull_request_target` safe in a public repository, and the files the
 # bot reads from the default branch exist.
 #
@@ -18,7 +18,7 @@
 #     pinned commit, and every other action is pinned by a full commit SHA;
 #   - pull request text reaches a `run:` script only through `env:`, and every job is bounded.
 # GitHub, "Securely using pull_request_target" and "Secure use reference" (docs.github.com,
-# read 2026-11-24) give the reasons; TASKS.md, CI-3, the sources. The `spec` job in
+# read 2026-11-24) give the reasons; development/WBS.md, CI-3, the sources. The `spec` job in
 # .github/workflows/ci.yml runs it on every pull request.
 cmake_minimum_required(VERSION 3.20)
 
@@ -274,6 +274,34 @@ endforeach()
 if(NOT rubric MATCHES "\n\\[trace\\]\n(#[^\n]*\n)*item = \"Traceability\"\n")
     problem("the rubric's [trace] table does not name the Traceability item")
 endif()
+# The files whose ticks and rows must link their work commit (development/WBS.md, development/RTM.md):
+# a [trace] entry naming a file that does not exist matches no line, so every tick would go
+# unchecked and the item would pass on nothing.
+string(FIND "${rubric}" "\n[trace]\n" trace_at)
+set(traced "")
+if(NOT trace_at EQUAL -1)
+    math(EXPR trace_at "${trace_at} + 1")
+    string(SUBSTRING "${rubric}" ${trace_at} -1 trace_text)
+    string(FIND "${trace_text}" "\n[" next_table)
+    if(NOT next_table EQUAL -1)
+        string(SUBSTRING "${trace_text}" 0 ${next_table} trace_text)
+    endif()
+    foreach(key ticks rows)
+        if(trace_text MATCHES "\n${key} = \\[([^]\n]*)\\]")
+            string(REGEX MATCHALL "\"[^\"]+\"" names "${CMAKE_MATCH_1}")
+            list(APPEND traced ${names})
+        endif()
+    endforeach()
+endif()
+if(NOT traced)
+    problem("the rubric's [trace] table names no ticks or rows file")
+endif()
+foreach(name IN LISTS traced)
+    string(REPLACE "\"" "" name "${name}")
+    if(NOT EXISTS "${REPOSITORY}/${name}")
+        problem("the rubric's [trace] file ${name} is missing; its ticks would go unchecked")
+    endif()
+endforeach()
 file(STRINGS "${REPOSITORY}/.github/CODEOWNERS" owners REGEX "^[^#]")
 set(catch_all "")
 foreach(line IN LISTS owners)

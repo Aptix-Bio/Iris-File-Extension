@@ -1,5 +1,5 @@
-# The review bot's rubric (CI-3, TASKS.md). One [[item]] per checkbox the bot ticks in the pull
-# request's "Agent review" section. The bot runs from Aptix-Bio/governance at the commit
+# The review bot's rubric (CI-3, development/WBS.md). One [[item]] per checkbox the bot ticks in
+# the pull request's "Agent review" section. The bot runs from Aptix-Bio/governance at the commit
 # .github/workflows/review.yml pins, and loads this file, the files it names and
 # .github/CODEOWNERS from the default branch's commit, never from the pull request under review,
 # so a pull request cannot change the rules it is judged by.
@@ -12,19 +12,24 @@
 [review]
 product = "Iris-File-Extension (IFE), the public specification of the Iris slide file format and the C++20 library generated from it that reads, writes, validates and recovers those files, MIT-licensed"
 # The rules the model reviews against, read whole from the default branch; a missing one fails the
-# review by name. TASKS.md holds IFE's current work items and their ticks. MIGRATION.md (about
-# 290,000 characters, two-thirds of the whole) is not sent: its ticks are still traced below, and
-# the diff shows the lines a pull request changes in it. architecture.md
-# and CLAUDE.md hold its layering and design notes; CONTRIBUTING.md the append-only wire contract;
-# spec/ the format itself, whose JSON documents are the single source of truth for the generated
-# code; generator/README.md and tests/wire/README.md the drift gate and its witness. IFE keeps no
+# review by name. development/ holds the plan (development/README.md): the layering, block
+# governance and decisions (ARCHITECTURE.md), the work items and their ticks (WBS.md), the
+# requirements and their tests (RTM.md) and the pipeline rules (PIPELINE.md). WBS.md is sent whole
+# because the bot's excerpt mechanism matches only `PascalCase_n` IDs, which IFE's IDs (`CI-3.6`,
+# `RB-5`) are not. development/analysis/ holds the dated records and long write-ups and is not
+# sent. CLAUDE.md holds the design notes; CONTRIBUTING.md the append-only wire contract; spec/ the
+# format itself, whose JSON documents are the single source of truth for the generated code;
+# generator/README.md and tests/wire/README.md the drift gate and its witness. IFE keeps no
 # errata file.
 reference_files = [
     "development/style_guide.md",
     "development/ci_runners.md",
+    "development/README.md",
+    "development/ARCHITECTURE.md",
+    "development/PIPELINE.md",
+    "development/RTM.md",
+    "development/WBS.md",
     "CONTRIBUTING.md",
-    "TASKS.md",
-    "architecture.md",
     "CLAUDE.md",
     "spec/README.md",
     "spec/ife_header.json",
@@ -35,14 +40,14 @@ reference_files = [
 ]
 
 [trace]
-# IFE's work items are Markdown checkboxes in TASKS.md and MIGRATION.md (`- [x] CI-2.1 **Title.**
-# evidence`). Every new tick carries its evidence and links, on the tick's own line, to the GitHub
-# commit that did the work; a tick that does not fails `item`. Checked by the bot itself. IFE has
-# no requirements matrix, so no table rows are traced.
+# Every new WBS tick, and every RTM row moved to these statuses, links to the GitHub commit that
+# did the work (`- [x] CI-2.1 **Title.** evidence [1234567](.../commit/<full hash>)`, or the
+# link in the row's status cell); a line that does not fails `item`. Checked by the bot itself,
+# without the model.
 item = "Traceability"
-ticks = ["TASKS.md", "MIGRATION.md"]
-rows = []
-row_statuses = []
+ticks = ["development/WBS.md"]
+rows = ["development/RTM.md"]
+row_statuses = ["Implemented", "Verified"]
 
 [verification]
 # One maintainer: the pull request's author may give the final human verification until a second
@@ -51,18 +56,20 @@ allow_author = true
 
 [[item]]
 id = "Traceability"
-title = "Traceability: the TASKS.md or MIGRATION.md work items named; ticks carry evidence and a link to the work commit"
+title = "Traceability: the WBS items and RTM rows named; WBS ticks and RTM rows at Implemented or Verified carry evidence and a link to the work commit"
 blocking = true
 guidance = """
-The description names the work items it completes or advances as TASKS.md and MIGRATION.md
-number them (`CI-2.4`, `VL-1.1`, `RC-10`), and the branch is named `<kind>/<WorkPackage>_<n>`
-after one of them. Every box ticked in the diff has its evidence (a test and its result, a CI run
-and job, pasted output, a measurement) and, on the tick's own line, a link to the commit that did
-the work, `[1234567](https://github.com/Aptix-Bio/Iris-File-Extension/commit/<full hash>)`. The
-bot checks the links itself; judge only whether each linked commit plausibly does what the line
-claims. A change to code, the specification, the generator or a workflow without a matching
-TASKS.md or MIGRATION.md update in the same pull request fails. A heading whose status names work
-still owed is updated when the diff completes that work.
+The description names the work items it completes or advances as development/WBS.md numbers them
+(`CI-2.4`, `VL-1.1`, `RC-10`) and the RTM rows it touches (`Read_01`), and the branch is named
+`<kind>/<WorkPackage>_<n>` after one of the items. Every WBS box ticked in the diff has its
+evidence (a test and its result, a CI run and job, pasted output, a measurement) and, on the
+tick's own line, a link to the commit that did the work,
+`[1234567](https://github.com/Aptix-Bio/Iris-File-Extension/commit/<full hash>)`; every RTM row
+moved to Implemented or Verified links its commit the same way, in its status cell. The bot
+checks the links itself; judge only whether each linked commit plausibly does what the line
+claims. A change to code, the specification, the generator or a workflow without the matching
+WBS and RTM update in the same pull request fails (development/README.md, update rule). A
+package or row whose status names work still owed is updated when the diff completes that work.
 """
 
 [[item]]
@@ -251,8 +258,7 @@ guidance = """
 A document that describes more than one type or component has a Mermaid classDiagram (or a
 flowchart or sequenceDiagram for flow and lifecycle) that matches the code in this diff and
 renders. A change to the format updates spec/ife_spec.adoc's prose where the generated tables do
-not carry it. A decision that changed is recorded, dated, beside the TASKS.md or MIGRATION.md work
-item it changes. README.md stays true to how a consumer fetches, builds and links IFE, and its
+not carry it. A decision that changed is recorded, dated, as an amendment in development/ARCHITECTURE.md §1. README.md stays true to how a consumer fetches, builds and links IFE, and its
 examples still compile (tests/readme/).
 """
 
