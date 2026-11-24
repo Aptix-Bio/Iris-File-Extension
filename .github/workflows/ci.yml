@@ -35,6 +35,23 @@ name: CI
 #
 # The pattern across the last three: a branch no developer machine executes is
 # a branch no test can check, so each gets a job rather than a comment.
+#
+# Runners (Ryan, 2026-11-24: "We should be using blacksmith for our CI
+# runners"): every job runs on a Blacksmith runner at a label documented in
+# https://docs.blacksmith.sh/blacksmith-runners/overview (read 2026-11-24),
+# pinned where GitHub's -latest labels moved with the image.
+#   Linux    blacksmith-2vcpu-ubuntu-2404  2 vCPU, 8 GB; Ubuntu 24.04 is what
+#            ubuntu-latest ran, on the same image's software
+#   Windows  blacksmith-2vcpu-windows-2025 2 vCPU, 7 GB; public beta, with
+#            Visual Studio Build Tools 2022 in place of the full IDE
+#   macOS    blacksmith-6vcpu-macos-26     Apple M4; macOS 26 is what
+#            macos-latest ran, and Blacksmith follows GitHub's image
+# A macOS minute bills as twenty 2-vCPU Linux minutes (same page, FAQ), so the
+# two macOS legs are their own job, tests-macos, which waits (needs:) on the
+# Linux and MSVC legs and shares their steps through a YAML anchor. Each job
+# has a timeout, and CMAKE_BUILD_PARALLEL_LEVEL sets the compile jobs to the
+# runner's vCPU count: a bare -j under Makefiles starts every compile at once.
+# tools/runner_labels_lint.py, run by the spec job, fails on any other label.
 
 on:
   push:
@@ -44,9 +61,12 @@ on:
 jobs:
   spec:
     name: spec documents and drift
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+      - name: Every job on a pinned Blacksmith runner
+        run: python3 tools/runner_labels_lint.py
       - run: python3 -m generator --validate
       - run: python3 -m generator
       - run: python3 -m generator --check
@@ -69,23 +89,20 @@ jobs:
   tests:
     name: build and test (${{ matrix.compiler }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {os: ubuntu-latest, compiler: GCC}
-          - {os: ubuntu-latest, compiler: Clang, cxx: clang++}
-          - {os: macos-latest, compiler: AppleClang}
-          # AppleClang via Makefiles names the driver `c++`; the Xcode generator
-          # names it the raw toolchain binary `.../usr/bin/clang++`. That is a
-          # different identity to anything above: it is what a tool that
-          # classifies the compiler by name sees, and the only config whose
-          # driver is a toolchain binary with no SDK default. Both facts bit
-          # the README gate (tests/readme/readme_compiles.py), and neither
-          # AppleClang leg here nor any Linux leg can reproduce them.
-          - {os: macos-latest, compiler: Xcode, generator: Xcode}
-          - {os: windows-latest, compiler: MSVC}
-    steps:
+          - {os: blacksmith-2vcpu-ubuntu-2404, compiler: GCC, generator: ''}
+          - {os: blacksmith-2vcpu-ubuntu-2404, compiler: Clang, cxx: clang++}
+          - {os: blacksmith-2vcpu-windows-2025, compiler: MSVC}
+    # tests-macos runs these steps too (the anchor below). `generator` and `cxx`
+    # are declared on a leg of each job, empty where unused, so actionlint can
+    # type the shared expressions against both matrices.
+    steps: &test-steps
       - uses: actions/checkout@v7
       # .deps/corpus is fetched from iris.exampleslides.org at configure (see
       # tools/fetch_corpus.py); cache it by manifest digest so a fresh runner
@@ -116,16 +133,39 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release
           ${{ matrix.generator && format('-G {0}', matrix.generator) || '' }}
           ${{ matrix.cxx && format('-DCMAKE_CXX_COMPILER={0}', matrix.cxx) || '' }}
-      - run: cmake --build build --config Release -j
+      - run: cmake --build build --config Release
       - run: ctest --test-dir build -C Release --output-on-failure
+
+  tests-macos:
+    name: build and test (${{ matrix.compiler }})
+    needs: tests
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 6
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: blacksmith-6vcpu-macos-26, compiler: AppleClang, cxx: '', generator: ''}
+          # AppleClang via Makefiles names the driver `c++`; the Xcode generator
+          # names it the raw toolchain binary `.../usr/bin/clang++`. That is a
+          # different identity to anything above: it is what a tool that
+          # classifies the compiler by name sees, and the only config whose
+          # driver is a toolchain binary with no SDK default. Both facts bit
+          # the README gate (tests/readme/readme_compiles.py), and neither
+          # AppleClang leg here nor any Linux leg can reproduce them.
+          - {os: blacksmith-6vcpu-macos-26, compiler: Xcode, cxx: '', generator: Xcode}
+    steps: *test-steps
 
   bazel:
     name: bazel build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [blacksmith-2vcpu-ubuntu-2404, blacksmith-2vcpu-windows-2025]
     steps:
       - uses: actions/checkout@v7
       # MODULE.bazel resolves Iris-Headers via local_path_override
@@ -168,7 +208,10 @@ jobs:
 
   downstream:
     name: Iris-Slide builds against this branch
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 45
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@v7
       # Iris-Slide's CMake FetchContent-pulls IFE from origin/main; the
@@ -209,11 +252,14 @@ jobs:
           -D TURBOJPEG_INCLUDE="/opt/libjpeg-turbo/include/"
           -D FETCHCONTENT_SOURCE_DIR_IRISFILEEXTENSION=$GITHUB_WORKSPACE
       - name: Build
-        run: cmake --build build --config Release -j
+        run: cmake --build build --config Release
 
   sanitizers:
     name: address and undefined behaviour
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 60
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@v7
       # Corpus cache as in the tests job: fresh runners must not hit the
@@ -228,12 +274,13 @@ jobs:
           -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
-      - run: cmake --build build-asan -j
+      - run: cmake --build build-asan
       - run: ctest --test-dir build-asan --output-on-failure
 
   document:
     name: specification document
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: ruby/setup-ruby@v1
@@ -256,7 +303,8 @@ jobs:
 
   wasm:
     name: emscripten (the residency branch)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: mymindstorm/setup-emsdk@v16
@@ -275,7 +323,11 @@ jobs:
 
   big-endian:
     name: big-endian (s390x)
-    runs-on: ubuntu-latest
+    # QEMU user-mode emulation through binfmt_misc in Docker; Blacksmith's x64
+    # Linux runners run Docker (they boot GitHub's image), and the first run on
+    # them is the evidence that binfmt registration works there.
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v4.2.0
