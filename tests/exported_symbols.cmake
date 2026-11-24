@@ -19,6 +19,8 @@ if(NOT EXISTS "${LIBRARY}")
     message(FATAL_ERROR "no library at ${LIBRARY}")
 endif()
 
+# The caller passes CMAKE_NM as NM_TOOL; find_program searches PATH only when
+# it is unset (a direct `cmake -P` run).
 find_program(NM_TOOL NAMES nm llvm-nm)
 if(NOT NM_TOOL)
     message(STATUS "nm not found; skipping the exported-symbol check")

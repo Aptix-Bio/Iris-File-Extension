@@ -456,12 +456,17 @@ if(IFE_BUILD_TESTS)
     target_link_libraries(ife_validation_tests PRIVATE ${IFE_Dependencies})
     add_test(NAME ife_validation_tests COMMAND ife_validation_tests)
 
-    # The generated layer stays out of the exported ABI.
+    # The generated layer stays out of the exported ABI. NM_TOOL is the nm
+    # CMake resolved for the toolchain that linked the library (CMAKE_NM).
+    # A PATH search instead takes whichever nm comes first, and an older one
+    # (Anaconda ships cctools' nm without -C) fails the test before it
+    # reads a symbol.
     if(IFE_BUILD_SHARED AND NOT EMSCRIPTEN)
         add_test(
             NAME ife_exported_symbols
             COMMAND ${CMAKE_COMMAND}
                 -DLIBRARY=$<TARGET_FILE:IrisFileExtension>
+                -DNM_TOOL=${CMAKE_NM}
                 -P ${PROJECT_SOURCE_DIR}/tests/exported_symbols.cmake
         )
     endif()
