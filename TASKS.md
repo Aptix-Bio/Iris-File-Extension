@@ -11,8 +11,8 @@ editing — line numbers drift.
 
 **Filed 2026-09-15** from FastFHIR, where the same design was ported for its conformance
 layer (FastFHIR `TASKS.md` Block K, decision D4) and changed for exactly this reason.
-Ryan's direction: IFE writes with multiple threads too, so the sink has to be a parallel
-logger that threads drop entries into simultaneously, claiming space by CAS.
+Decided 2026-09-15: IFE writes with multiple threads too, so the sink must be a parallel
+logger that threads append entries to concurrently, each claiming its space by CAS.
 
 ### The defect
 
