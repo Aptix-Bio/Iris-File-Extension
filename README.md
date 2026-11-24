@@ -1,6 +1,6 @@
 # Iris File Extension
 
-This is the official implementation of the Iris File Extension specification, part of the Iris Digital Pathology project. This repository has a very limited scope; it provides the byte-offset vtables and enumerations referenced by the Iris Codec specification and validates files against the published IFE specification. This is an advanced repository. **If this is your first foray into Iris, the [Iris Codec Community Module](https://github.com/IrisDigitalPathology/Iris-Codec.git) is a much better choice**. 
+This is the official implementation of the Iris File Extension specification, part of the Iris Digital Pathology project. This repository has a very limited scope; it provides the byte-offset vtables and enumerations referenced by the Iris Slide specification and validates files against the published IFE specification. This is an advanced repository. **If this is your first foray into Iris, the [Iris Slide Community Module](https://github.com/Aptix-Bio/Iris-Slide.git) is a much better choice**. 
 
 > [!IMPORTANT]
 > **Schema-driven.** The byte-offset vtables and enumerations are expressed as
@@ -10,25 +10,25 @@ This is the official implementation of the Iris File Extension specification, pa
 Example Iris slide files are hosted to test decoding are hosted at [the Iris-Example-Files repository](https://github.com/IrisDigitalPathology/Iris-Example-Files). 
 
 > [!CAUTION]
-> **This repository is primarily for scanner device manufacturers and programmers wishing to write custom encoders and decoders. If this does not describe your goals, you should instead incorporate the [Iris Codec Community Module](https://github.com/IrisDigitalPathology/Iris-Codec.git) into your project**. This repository allows for low-level manipulation of the Iris File Extension file structure in a very narrow scope: it just provides byte offsets and validation checks against the current IFE standard. Most programmers (particularly for research) attempting to access Iris files **should not use this repository** and use Iris Codec instead.
+> **This repository is primarily for scanner device manufacturers and programmers wishing to write custom encoders and decoders. If this does not describe your goals, you should instead incorporate the [Iris Slide Community Module](https://github.com/Aptix-Bio/Iris-Slide.git) into your project**. This repository allows for low-level manipulation of the Iris File Extension file structure in a very narrow scope: it just provides byte offsets and validation checks against the current IFE standard. Most programmers (particularly for research) attempting to access Iris files **should not use this repository** and use Iris Slide instead.
 
 > [!NOTE]
-> The scope of this repository is only serializing or deserializing Iris slide files. Compression and decompression are **NOT** components of this repository. The WSI tile byte arrays will be referenced in their on-disk compressed forms and it is up to your implementation to compress or decompress tiles. If you would like a system that performs image compression and decompression, you should instead incorporate the [Iris Codec Community Module](https://github.com/IrisDigitalPathology/Iris-Codec.git), which incorporates this repository for Iris slide file serialization.
+> The scope of this repository is only serializing or deserializing Iris slide files. Compression and decompression are **NOT** components of this repository. The WSI tile byte arrays will be referenced in their on-disk compressed forms and it is up to your implementation to compress or decompress tiles. If you would like a system that performs image compression and decompression, you should instead incorporate the [Iris Slide Community Module](https://github.com/Aptix-Bio/Iris-Slide.git), which incorporates this repository for Iris slide file serialization.
 
-This repository builds C++ access to Iris files — header-only, static, shared, or as a WebAssembly module. It exposes the *byte structure*; the [Iris Codec Community Module](https://github.com/IrisDigitalPathology/Iris-Codec.git) builds on it and exposes *compression and the high-level slide API*. Iris Codec publishes Python and JavaScript bindings for its layer; bindings for this layer are planned but not yet published. The repository builds with CMake
+This repository builds C++ access to Iris files — header-only, static, shared, or as a WebAssembly module. It exposes the *byte structure*; the [Iris Slide Community Module](https://github.com/Aptix-Bio/Iris-Slide.git) builds on it and exposes *compression and the high-level slide API*. Iris Slide publishes Python and JavaScript bindings for its layer; bindings for this layer are planned but not yet published. The repository builds with CMake
 and has an equivalent Bazel build (`BUILD.bazel`); both are exercised in CI.
 
 <p xmlns:cc="http://creativecommons.org/ns#" >This repository is licensed under the MIT software license. The Iris File Extension is licensed under <a href="https://creativecommons.org/licenses/by-nd/4.0/?ref=chooser-v1" target="_blank" rel="license noopener noreferrer" style="display:inline-block;">CC BY-ND 4.0 <img style="height:22px!important;margin-left:3px;vertical-align:text-bottom;" src="https://mirrors.creativecommons.org/presskit/icons/cc.svg?ref=chooser-v1" alt=""><img style="height:22px!important;margin-left:3px;vertical-align:text-bottom;" src="https://mirrors.creativecommons.org/presskit/icons/by.svg?ref=chooser-v1" alt=""><img style="height:22px!important;margin-left:3px;vertical-align:text-bottom;" src="https://mirrors.creativecommons.org/presskit/icons/nd.svg?ref=chooser-v1" alt=""></a></p>
 
 # Installation
-Incorporating the Iris File Extension into your code base is simple; Additional [Iris headers](https://github.com/IrisDigitalPathology/Iris-Headers) are required but are automatically included when this repository is built or included in a CMake project.
+Incorporating the Iris File Extension into your code base is simple; Additional [Iris headers](https://github.com/Aptix-Bio/Iris-Headers) are required but are automatically included when this repository is built or included in a CMake project.
 
-No release has been tagged yet, so build from source for now. Once one is, pre-compiled binaries will be published under the **releases tab** for Linux (x86-64 and arm64), macOS (universal) and Windows (x64): each archive carries the shared and static libraries, the public headers, and the CMake package configuration that `find_package(IrisFileExtension)` resolves, pinned by SHA-256 in the release's `SHA256SUMS`, with the specification as PDF and HTML. Python and JavaScript access to slides is provided today by the [Iris Codec Community Module](https://github.com/IrisDigitalPathology/Iris-Codec.git), which consumes this repository for slide file serialization.
+No release has been tagged yet, so build from source for now. Once one is, pre-compiled binaries will be published under the **releases tab** for Linux (x86-64 and arm64), macOS (universal) and Windows (x64): each archive carries the shared and static libraries, the public headers, and the CMake package configuration that `find_package(IrisFileExtension)` resolves, pinned by SHA-256 in the release's `SHA256SUMS`, with the specification as PDF and HTML. Python and JavaScript access to slides is provided today by the [Iris Slide Community Module](https://github.com/Aptix-Bio/Iris-Slide.git), which consumes this repository for slide file serialization.
 
 ### Non-CMake Project
 If you are **NOT** using CMake to build your project, you should still use CMake to generate the Iris File Extension library.
 ```shell
-git clone --depth 1 https://github.com/IrisDigitalPathology/Iris-File-Extension.git
+git clone --depth 1 https://github.com/Aptix-Bio/Iris-File-Extension.git
 # Optional cmake flags to consider: 
 #   -DCMAKE_INSTALL_PREFIX='' for custom install directory
 #   -DIFE_BUILD_EXAMPLES=ON to test build the included examples
@@ -47,8 +47,8 @@ is resolved from the sibling checkout next to this repository (see
 `MODULE.bazel`).
 
 ```shell
-git clone https://github.com/IrisDigitalPathology/Iris-File-Extension.git
-git clone https://github.com/IrisDigitalPathology/Iris-Headers.git
+git clone https://github.com/Aptix-Bio/Iris-File-Extension.git
+git clone https://github.com/Aptix-Bio/Iris-Headers.git
 cd Iris-File-Extension
 bazel test //... --test_output=errors
 ```
@@ -74,7 +74,7 @@ If you **are** using CMake for your build, You may directly incorporate this rep
 ```CMake
 FetchContent_Declare (
     IrisFileExtension
-    GIT_REPOSITORY https://github.com/IrisDigitalPathology/Iris-File-Extension.git
+    GIT_REPOSITORY https://github.com/Aptix-Bio/Iris-File-Extension.git
     GIT_TAG "origin/main"
     GIT_SHALLOW ON
 )
@@ -93,7 +93,7 @@ target_link_libraries (
 
 ## C++ Interface
 
-The library is namespaced by layer: `Iris::` is the shared core (Iris-Headers — `Result`, `Buffer`, `Memory`), `Iris::File::` is this repository. It exposes two handles: a **`Parser`** to read a slide and a **`Builder`** to write one. An application *owns* a handle and keeps its own job: a reader decodes the streams a Parser hands it; an encoder compresses, runs its threads, and names and moves its files, while its Builder claims space and writes every byte of the file's structure. Neither handle decodes or encodes an image — compression belongs to your codec (or to [Iris Codec](https://github.com/IrisDigitalPathology/Iris-Codec.git)).
+The library is namespaced by layer: `Iris::` is the shared core (Iris-Headers — `Result`, `Buffer`, `Memory`), `Iris::File::` is this repository. It exposes two handles: a **`Parser`** to read a slide and a **`Builder`** to write one. An application *owns* a handle and keeps its own job: a reader decodes the streams a Parser hands it; an encoder compresses, runs its threads, and names and moves its files, while its Builder claims space and writes every byte of the file's structure. Neither handle decodes or encodes an image — compression belongs to your codec (or to [Iris Slide](https://github.com/Aptix-Bio/Iris-Slide.git)).
 
 Every C++ example on this page is compiled against the real headers by the `ife_readme_compiles` test, as published. Editing one? The HTML comment above each block (`<!-- ife-compile: fragment | program | skip -->`, invisible when rendered) tells the gate how to compile it; placeholder names such as `path` and `ptr` are declared in `tests/readme/readme_context.hpp`.
 
@@ -255,7 +255,7 @@ This repository presently builds C++ — header-only, static, shared, or as a
 WebAssembly module — and publishes no language bindings yet.
 
 Bindings divide by layer rather than by language. The
-[Iris Codec Community Module](https://github.com/IrisDigitalPathology/Iris-Codec.git)
+[Iris Slide Community Module](https://github.com/Aptix-Bio/Iris-Slide.git)
 publishes Python bindings over the high-performance codec: opening slides,
 decoding tiles, compression. Bindings for this layer — validating, abstracting,
 mapping and recovering the file structure, for callers who need to work at that

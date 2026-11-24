@@ -105,7 +105,7 @@ struct Placed { Offset table, metadata, icc, images, attributes; };
 
 /// Place everything after the tiles and seal. `metadata_first` reserves the
 /// METADATA block right after the tile table and fills it once its children
-/// exist (Iris-Codec's order: fixed-size blocks ahead of the ones that change);
+/// exist (Iris-Slide's order: fixed-size blocks ahead of the ones that change);
 /// otherwise METADATA is appended last. Either is legal — the order of the
 /// calls is the order on disk.
 Placed write_structure(const Builder& builder, const BuilderTileTableInfo& grid,

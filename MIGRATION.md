@@ -1,18 +1,24 @@
 # IFE Migration — JSON-Specified Format, Generated Code & Documentation
 
+> **2026-11-24 — rename.** The open-source library formerly named Iris-Codec
+> is now Iris-Slide (https://github.com/Aptix-Bio/Iris-Slide); its namespace is
+> `IrisSlide` and IFE's entry point is `is_iris_slide_file`. Standing decisions
+> and open work orders below use the new name. Dated records keep Iris-Codec,
+> its file names and its SHAs, which name what existed when they were written.
+
 # ▶ HANDLE LAYER — Builder / Parser, and the namespace hierarchy (2026-09-28)
 
 Decisions (Ryan). The executable work orders live in the gitignored
 `fastfhir_cap_api_transfer_handoff.md` Part A; what must outlive it is here.
 
-- **Layering.** An application *owns* an IFE handle: Iris-Codec's Encoder holds an
+- **Layering.** An application *owns* an IFE handle: Iris-Slide's Encoder holds an
   `Iris::File::Builder`, its Slide holds an `Iris::File::Parser`. The Builder
   claims space and writes every block; the Encoder does sources, codecs and
   threads. The Parser owns the read-only mapping and bounds-checked bytes; the
   Slide decodes. Worked example of the split: the *Encoder* names the temp file,
   hands it to the Builder, and moves the finished file — the Builder only
   writes where it is told and leaves a closed file at `finalize`.
-- **IFE is independent of Iris-Codec.** The codec depends on IFE, never the
+- **IFE is independent of Iris-Slide.** The codec depends on IFE, never the
   reverse. IFE's handles are built first, anticipating the codec; Ryan rewrites
   the codec onto them later.
 - **Arenas never remap.** A HUGE sparse reservation (Builder default 8 GiB);
@@ -24,7 +30,7 @@ Decisions (Ryan). The executable work orders live in the gitignored
 - **Namespaces:** IFE is `Iris::File::` (renamed from `IFE::` 2026-09-28, before
   the `IFE::` spelling was ever pushed). Core stays `Iris::` (`Iris::Memory`).
   `Iris::Codec::` for the codec is wanted later, but only after the format
-  vocabulary Iris-Headers still declares in `namespace IrisCodec` (`Metadata`,
+  vocabulary Iris-Headers still declares in `namespace IrisSlide` (`Metadata`,
   `Encoding`, `AssociatedImageInfo`, …) moves to `Iris::`/`Iris::File::` —
   renamed in place it would make File depend on Codec. The `IFE_` prefixes
   (`IFE_EXPORT`, the `IFE_*` global aliases, `IFE_*.hpp`) name the product and
@@ -1186,9 +1192,9 @@ where, and what evidence already exists — nothing here needs re-deriving.
       One 2-bit trial produced 3, so "at most one leaf per flipped bit" is
       not a safe assertion.
 
-- [ ] **RC-10.3 — Iris-Codec must write tile frames. (Cross-repo; lockstep.)**
+- [ ] **RC-10.3 — Iris-Slide must write tile frames. (Cross-repo; lockstep.)**
       `TILE_INDEX` is the only identity witness in the format, and RC-9.1 makes
-      it decisive — but `../Iris-Codec/src/IrisCodecEncoder.cpp` contains no
+      it decisive — but `../Iris-Slide/src/IrisSlideEncoder.cpp` contains no
       `TilePixelDataCreateInfo` and no `TILE_INDEX` anywhere, so no real slide
       carries one. The corpus writer does
       (`tests/ife_corpus_writer_11.cpp`), which is why the 1.1 fixture proves
@@ -1271,9 +1277,9 @@ where, and what evidence already exists — nothing here needs re-deriving.
       the fix; not yet reproduced. Move the walkers onto it, and hold the
       bench hash and sweep accounting identical while doing so.
 
-- [ ] **RC-10.8 — Iris-Codec now refuses damaged slides at open. (Cross-repo.)**
+- [ ] **RC-10.8 — Iris-Slide now refuses damaged slides at open. (Cross-repo.)**
       `__INTERNAL__Slide`'s constructor calls `abstract_file_structure()`
-      directly (`IrisCodecSlide.cpp:216`, reached from `IrisCodecCache.cpp:55`
+      directly (`IrisSlide.cpp:216`, reached from `IrisSlideCache.cpp:55`
       with no `validate_file_structure` on that path). Since RC-10.1 that call
       throws on a structurally damaged file instead of returning fabricated
       values or faulting. Decide what a viewer does next: surface the
@@ -3911,8 +3917,8 @@ custom preprocessor in the pipeline.
       how many languages cross it. This repository owns the byte structure and
       its validation, and a Python caller manipulating that structure is
       squarely inside it. The two binding sets are complementary rather than
-      duplicative — Iris-Codec's expose high-performance decode and encode;
-      these expose the low-level byte manipulation Iris-Codec deliberately
+      duplicative — Iris-Slide's expose high-performance decode and encode;
+      these expose the low-level byte manipulation Iris-Slide deliberately
       hides.
 
       C++ remains the preferred language for an encoder or decoder, but that is
@@ -3921,7 +3927,7 @@ custom preprocessor in the pipeline.
       machine-readable precisely so that implementations need not all look
       alike.
 
-      **Bind the `Abstraction::` methods** — `is_iris_codec_file`,
+      **Bind the `Abstraction::` methods** — `is_iris_slide_file`,
       `validate_file_structure`, `abstract_file_structure`,
       `generate_file_map`, `recover_file_structure`, and the `Abstraction::`
       structs. Each entry point takes a single `const FileAccessInfo&`
@@ -4188,7 +4194,7 @@ rather than hard-coding block names.
 - **The offset target is a complete nested attribute structure** — well-formed by construction, recursed with a depth bound and the existing `VisitPath` / `MAX_BLOCK_DEPTH` cycle machinery.
 - **Claims stay orthogonal to structure** — `METADATA_I2S` / `METADATA_DICOM` keep describing the key *vocabulary*; `KIND` describes the value's *structure*; one attributes block can mix strings and nested offsets, which is exactly a DICOM sequence tree.
 - **The rebuilt format is born as its real 1.0** — spec document, oracle, and encoder regenerate together as one coherent act.
-Status: **DECIDED — NOT YET IMPLEMENTED.** The generator, spec JSON, oracle, Iris-Codec encoder, and this document's other records update together in the implementation pass. This paragraph is the loud announcement; the historical flat contract below it is superseded.
+Status: **DECIDED — NOT YET IMPLEMENTED.** The generator, spec JSON, oracle, Iris-Slide encoder, and this document's other records update together in the implementation pass. This paragraph is the loud announcement; the historical flat contract below it is superseded.
 
 **⚠ SUPERSEDED BY THE DECISION ABOVE — the flat contract this paragraph records described the format as shipped; it is being reshaped.** The attribute index (`ATTRIBUTE_SIZES`' `KEY_SIZE`/`VALUE_SIZE` entry + the packed `ATTRIBUTE_BYTES` run) is a flat key→value slice store, and that is the format's shipped 1.0 contract — not an omission this migration can repair, and not a regression: the retired layer's `Attributes` was equally flat (`std::map<std::string, std::u8string>`), and the pinned oracle fixtures prove the flat wire. The `METADATA_DICOM` claim is "DICOM PS3.3 tag-value pairs (32-bit tags, UTF-8 values per NEMA character-set requirements), carried without restriction" — "without restriction" constrains the *vocabulary* (any DICOM tag may be carried), not the *structure* (nested sequences are not represented). DICOM's tree is flattened at the consumer boundary — `IrisCodecDcmBridge.cpp` descends nested sequences and emits flat pairs, the standard DICOM→flat-store interop pattern, with the key encoding the path (`0040,A730[0]/0008,0100` or the leaf tag). The pairs payload (`std::vector<std::pair<std::string, std::string>>`) carries those flat path-keys unchanged; nothing in the API blocks DICOM. The format cannot grow nesting in place — the index is shipped 1.0 and append-only forbids reshaping it — and the "schema stays weak" rule forbids adding a tree vocabulary to describe how one consumer serializes its structures. **The honest residual, stated plainly:** if a future consumer needs the DICOM tree *structure itself* preserved rather than its flattened leaf pairs, the flat format cannot hold it. The additive escape hatch is a future appended block, deliberately gated behind a real consumer need — it must never change the shipped 1.0 blocks.
 

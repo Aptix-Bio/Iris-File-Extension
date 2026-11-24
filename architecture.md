@@ -70,7 +70,7 @@ schema edit needs a `cmake .` before it reaches a build directory.
 ### The handles, and the split with an application
 
 IFE's public handles are `Iris::File::Builder` (write) and `Iris::File::Parser`
-(read). An application *owns* one — Iris-Codec's Encoder holds a Builder, its
+(read). An application *owns* one — Iris-Slide's Encoder holds a Builder, its
 Slide holds a Parser — and IFE never depends on the application: the codec
 depends on IFE, not the reverse.
 
@@ -330,7 +330,7 @@ Explicit so they are not rediscovered as bugs.
   no in-process path. Reference-level integrity is still not
   content-level integrity: a flipped inline scalar has no second witness and
   reads back changed (RC-10.2).
-* **Iris-Codec writes no tile frames yet.** `TILE_INDEX` is the only identity
+* **Iris-Slide writes no tile frames yet.** `TILE_INDEX` is the only identity
   witness in the format. The `Builder` frames every tile by default (and every
   tile of a Z-stacked layer always), so real slides gain it once the codec's
   encoder moves onto the Builder.

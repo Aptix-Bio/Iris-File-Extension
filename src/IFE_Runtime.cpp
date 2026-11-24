@@ -454,7 +454,7 @@ std::string annotation_groups_error(const b::METADATA& __metadata) {
 
 // MARK: - Entry points
 
-Result IFE_EXPORT is_iris_codec_file(const FileAccessInfo& __info) noexcept {
+Result IFE_EXPORT is_iris_slide_file(const FileAccessInfo& __info) noexcept {
     // MAGIC is a `constant` field, so the generated layer validates it rather
     // than handing it back: FILE_HEADER::validate() checks the magic number,
     // the recovery tag, and that the header fits within the file.
@@ -618,7 +618,7 @@ Abstraction::File IFE_EXPORT abstract_file_structure(const FileAccessInfo& __inf
             // patterns (ORIENTATION_90 is 0x55A0, not 90). Casting the float
             // made a clean 90-degree image read back as enum 90 -- no named
             // orientation -- and a damaged negative angle undefined behaviour.
-            // Iris-Codec's encoder decodes bits to degrees going in; this is
+            // Iris-Slide's encoder decodes bits to degrees going in; this is
             // the matching step coming out. Any 16 bits are a defined value
             // of a uint16_t-backed enum, so no damage can make this UB.
             image.info.orientation  = static_cast<AssociatedImageInfo::Orientation>(

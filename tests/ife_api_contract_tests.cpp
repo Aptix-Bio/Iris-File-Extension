@@ -1,10 +1,10 @@
 /**
  * @file ife_api_contract_tests.cpp
  * @brief Phase 0 of the FastFHIR → IFE migration (fastfhir_migration_handoff.md):
- *        freeze the exact IFE surface Iris-Codec consumes, so a migration edit
+ *        freeze the exact IFE surface Iris-Slide consumes, so a migration edit
  *        fails HERE before it reaches the codec's own build.
  *
- * WHY THIS EXISTS. Iris-Codec (`/Users/ryanlandvater/GitHub/Iris-Codec`) pulls
+ * WHY THIS EXISTS. Iris-Slide (`/Users/ryanlandvater/GitHub/Iris-Slide`) pulls
  * IFE with `FetchContent(GIT_TAG "origin/main")` and links the objects with
  * `IFE_EXPORT=`. There is no version pin between them: a rename or a removed
  * member on IFE `main` breaks every codec build on its next configure. This
@@ -40,9 +40,9 @@ int g_failures = 0;
 } while (0)
 
 // ---------------------------------------------------------------------------
-// Compile-time contract: the exact types Iris-Codec names.
-// Sites: IrisCodecSlide.cpp:37,62,216; IrisCodecEncoder.cpp:702,848,889,1323;
-//        IrisCodecDeriveLayers.cpp:93; IrisCodecPrivTypes.hpp:144.
+// Compile-time contract: the exact types Iris-Slide names.
+// Sites: IrisSlide.cpp:37,62,216; IrisSlideEncoder.cpp:702,848,889,1323;
+//        IrisSlideDeriveLayers.cpp:93; IrisSlidePrivTypes.hpp:144.
 // ---------------------------------------------------------------------------
 
 // The one mapped-file argument every file-level entry point takes.
@@ -52,7 +52,7 @@ static_assert(std::is_integral_v<decltype(FileAccessInfo::file_size)>);
 // The three entry points the codec calls. The file-map PRODUCER
 // (generate_file_map) is the ADVANCED tier now — its contract is frozen in
 // ife_advanced_api_tests.cpp.
-using IfeResult = decltype(is_iris_codec_file(std::declval<const FileAccessInfo&>()));
+using IfeResult = decltype(is_iris_slide_file(std::declval<const FileAccessInfo&>()));
 static_assert(std::is_same_v<IfeResult, decltype(validate_file_structure(std::declval<const FileAccessInfo&>()))>);
 static_assert(std::is_same_v<IfeResult, Iris::Result>);  // the codec's `Iris::Result`
 static_assert(std::is_same_v<decltype(abstract_file_structure(std::declval<const FileAccessInfo&>())), Abstraction::File>);
@@ -76,16 +76,16 @@ static_assert(std::is_same_v<IFE_TileEntry, Abstraction::TileEntry>);
 // removed or renamed. Instanced from main(), so the body is compiled.
 // ---------------------------------------------------------------------------
 void touch_frozen_members(Abstraction::File& file, Abstraction::TileTable& table) {
-    // Abstraction::File — IrisCodecSlide.cpp:227-340.
+    // Abstraction::File — IrisSlide.cpp:227-340.
     (void)file.header;
     (void)file.tileTable;
     (void)file.images;
-    (void)file.metadata;        // -> .codec  (IrisCodecSlide.cpp:227)
+    (void)file.metadata;        // -> .codec  (IrisSlide.cpp:227)
     (void)file.annotations;
     (void)file.attributeTree;
     (void)file.clinicalOffset;
     (void)file.clinicalSize;
-    // Abstraction::TileTable — IrisCodecSlide.cpp:232-235, IrisCodecEncoder.cpp.
+    // Abstraction::TileTable — IrisSlide.cpp:232-235, IrisSlideEncoder.cpp.
     (void)table.encoding;
     (void)table.format;
     (void)table.extent;
@@ -93,7 +93,7 @@ void touch_frozen_members(Abstraction::File& file, Abstraction::TileTable& table
     (void)table.tileLength;
     // The exact chains the codec follows.
     (void)table.layers;
-    (void)file.metadata.codec;  // IrisCodecSlide.cpp:227
+    (void)file.metadata.codec;  // IrisSlide.cpp:227
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +105,7 @@ void smoke() {
     const FileAccessInfo info{buffer, sizeof buffer};
 
     // The two noexcept predicates answer "not an Iris file" rather than crash.
-    IFE_CHECK(is_iris_codec_file(info).failed());
+    IFE_CHECK(is_iris_slide_file(info).failed());
     IFE_CHECK(validate_file_structure(info).failed());
 
     // The read path refuses a damaged file by throwing, per its contract.
@@ -119,7 +119,7 @@ void smoke() {
 
     // A zero-length mapping is a legal "no bytes" query.
     const FileAccessInfo empty{nullptr, 0};
-    IFE_CHECK(is_iris_codec_file(empty).failed());
+    IFE_CHECK(is_iris_slide_file(empty).failed());
 }
 
 }  // namespace

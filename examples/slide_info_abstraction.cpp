@@ -8,7 +8,7 @@
  *
  * @copyright Copyright (c) 2025 Ryan Landvater
  *
- * This file gives an example of how to implement the Iris Codec File Extension
+ * This file gives an example of how to implement the Iris File Extension
  * using the Iris::File::Abstraction::File higher-level structure. This method
  * removes the manual process of removing slide information by header and arrays
  * and delegates it to the abstraction structure. All significant data blocks
@@ -54,9 +54,9 @@
          << help_statement;
      return EXIT_FAILURE;
  }
- const char* PARSE_ECODING(IrisCodec::Encoding encoding);
+ const char* PARSE_ECODING(IrisSlide::Encoding encoding);
  const char* PARSE_FORMAT(Iris::Format format);
- const char* PARSE_IMAGE_ENCODING(IrisCodec::ImageEncoding image_encoding);
+ const char* PARSE_IMAGE_ENCODING(IrisSlide::ImageEncoding image_encoding);
  const char* PARSE_ANNOTATION_TYPE(Iris::AnnotationTypes annotation_type);
  
  
@@ -191,13 +191,13 @@
      return EXIT_SUCCESS;
  }
  
- inline const char* PARSE_ECODING(IrisCodec::Encoding encoding)
+ inline const char* PARSE_ECODING(IrisSlide::Encoding encoding)
  {
      switch (encoding) {
-     case IrisCodec::TILE_ENCODING_UNDEFINED: return "TILE_ENCODING_UNDEFINED";
-     case IrisCodec::TILE_ENCODING_IRIS:return "TILE_ENCODING_IRIS";
-     case IrisCodec::TILE_ENCODING_JPEG:return "TILE_ENCODING_JPEG";
-     case IrisCodec::TILE_ENCODING_AVIF:return "TILE_ENCODING_AVIF";
+     case IrisSlide::TILE_ENCODING_UNDEFINED: return "TILE_ENCODING_UNDEFINED";
+     case IrisSlide::TILE_ENCODING_IRIS:return "TILE_ENCODING_IRIS";
+     case IrisSlide::TILE_ENCODING_JPEG:return "TILE_ENCODING_JPEG";
+     case IrisSlide::TILE_ENCODING_AVIF:return "TILE_ENCODING_AVIF";
      } return "TILE_ENCODING_UNDEFINED";
  }
  inline const char* PARSE_FORMAT(Iris::Format format)
@@ -210,13 +210,13 @@
      case Iris::FORMAT_R8G8B8A8: return "FORMAT_R8G8B8A8";
      } return "FORMAT_UNDEFINED";
  }
- inline const char* PARSE_IMAGE_ENCODING(IrisCodec::ImageEncoding image_encoding)
+ inline const char* PARSE_IMAGE_ENCODING(IrisSlide::ImageEncoding image_encoding)
  {
      switch (image_encoding) {
-     case IrisCodec::IMAGE_ENCODING_UNDEFINED:return "IMAGE_ENCODING_UNDEFINED";
-     case IrisCodec::IMAGE_ENCODING_PNG:return "IMAGE_ENCODING_PNG";
-     case IrisCodec::IMAGE_ENCODING_JPEG:return "IMAGE_ENCODING_JPEG";
-     case IrisCodec::IMAGE_ENCODING_AVIF:return "IMAGE_ENCODING_AVIF";
+     case IrisSlide::IMAGE_ENCODING_UNDEFINED:return "IMAGE_ENCODING_UNDEFINED";
+     case IrisSlide::IMAGE_ENCODING_PNG:return "IMAGE_ENCODING_PNG";
+     case IrisSlide::IMAGE_ENCODING_JPEG:return "IMAGE_ENCODING_JPEG";
+     case IrisSlide::IMAGE_ENCODING_AVIF:return "IMAGE_ENCODING_AVIF";
      } return "IMAGE_ENCODING_UNDEFINED";
  }
  inline const char* PARSE_ANNOTATION_TYPE(Iris::AnnotationTypes annotation_type)

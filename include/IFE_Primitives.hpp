@@ -61,8 +61,8 @@ namespace Iris::File {
 namespace primitives {
 
 using Iris::BYTE;
-using IrisCodec::Offset;
-using IrisCodec::Size;
+using IrisSlide::Offset;
+using IrisSlide::Size;
 
 /// The high byte every recovery tag shares (ife_spec.adoc §ife-recovery-codes).
 /// A scan tests `(tag >> 8) == this` before trusting a 0x55xx word, which is

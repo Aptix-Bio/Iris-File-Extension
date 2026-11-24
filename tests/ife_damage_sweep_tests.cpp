@@ -17,7 +17,7 @@
  *
  * Single flips, one at a time, over every bit of every fixture — the shape of
  * FastFHIR's census_single_flip_sweep, and the threat model recovery assumes.
- * Each flipped file goes through is_iris_codec_file, validate_file_structure,
+ * Each flipped file goes through is_iris_slide_file, validate_file_structure,
  * generate_file_map, abstract_file_structure and a Parser bound to it, then
  * the bit is flipped back. Throwing is a legitimate answer. The invariants:
  *
@@ -124,7 +124,7 @@ void check_parser(const std::vector<BYTE>& f) {
 /// Every public read entry point over `f`. Returns whether it read completely.
 bool read_path(const std::vector<BYTE>& f, Tally& tally) {
     const FileAccessInfo info{f.data(), f.size()};
-    (void)is_iris_codec_file(info);
+    (void)is_iris_slide_file(info);
     const bool valid = validate_file_structure(info).succeeded();
     // generate_file_map() records what the offset graph CLAIMS, so over a
     // damaged file an entry past EOF is legitimate. Reading one is not.

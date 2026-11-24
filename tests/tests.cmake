@@ -147,7 +147,7 @@ if(IFE_BUILD_TESTS)
     endif()
 
     # The public API, end to end: the fetched snapshot in, the four entry
-    # points Iris-Codec calls out. The snapshot lives in .deps/corpus/ (the
+    # points Iris-Slide calls out. The snapshot lives in .deps/corpus/ (the
     # fetch above), so this test needs no second translation unit.
     add_executable(
         ife_runtime_tests
@@ -176,7 +176,7 @@ if(IFE_BUILD_TESTS)
     set_tests_properties(ife_runtime_tests PROPERTIES TIMEOUT 120)
 
     # Phase 0 of the FastFHIR → IFE migration (fastfhir_migration_handoff.md):
-    # the exact surface Iris-Codec consumes from `origin/main`. Iris-Codec pulls
+    # the exact surface Iris-Slide consumes from `origin/main`. Iris-Slide pulls
     # IFE by FetchContent with no version pin, so a rename on main breaks the
     # codec's next configure; this build fails first, here.
     add_executable(

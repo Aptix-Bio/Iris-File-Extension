@@ -85,10 +85,10 @@ if (NOT DEFINED irisheaders_SOURCE_DIR)
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # IFE and Iris-Headers move together: a change here can depend on an
     # unreleased change there.  Landing that change in the Org's Iris-Headers
-    # would alter the dependency every downstream consumer (Iris-Codec, ...)
+    # would alter the dependency every downstream consumer (Iris-Slide, ...)
     # already builds against.  So each fork fetches its OWN Iris-Headers — a
     # checkout of ryanlandvater/Iris-File-Extension fetches
-    # ryanlandvater/Iris-Headers, a checkout of IrisDigitalPathology/... fetches
+    # ryanlandvater/Iris-Headers, a checkout of Aptix-Bio/... fetches
     # the Org's — and an unreleased pair is proved in an insulated fork before
     # either side reaches the Org.  The owner is taken from this repo's `origin`
     # remote, so the two can never cross.  A tarball with no origin, or any
@@ -119,7 +119,7 @@ if (NOT DEFINED irisheaders_SOURCE_DIR)
                     _ife_origin MATCHES "github\\.com[:/]([^/]+)/")
                     set(IFE_IRIS_HEADERS_OWNER "${CMAKE_MATCH_1}")
                 else()
-                    set(IFE_IRIS_HEADERS_OWNER "IrisDigitalPathology")
+                    set(IFE_IRIS_HEADERS_OWNER "Aptix-Bio")
                 endif()
             endif()
         endif()
@@ -175,10 +175,10 @@ set (
     ${IFE_INCLUDE_DIR}/IFE_Builder.hpp
     ${IFE_INCLUDE_DIR}/IFE_Parser.hpp
     # The two Iris-Headers headers the public surface includes. IrisCore.hpp
-    # and IrisCodecCore.hpp are runtime/codec concerns IFE does not use —
+    # and IrisSlideCore.hpp are runtime/codec concerns IFE does not use —
     # they stay with Iris-Headers' own package, not this one.
     ${irisheaders_SOURCE_DIR}/include/IrisTypes.hpp
-    ${irisheaders_SOURCE_DIR}/include/IrisCodecTypes.hpp
+    ${irisheaders_SOURCE_DIR}/include/IrisSlideTypes.hpp
 )
 # IFE_Window.{hpp,cpp} is Emscripten-only (the WASM remote windowed fetch)
 # and the installed package is native, so it is not exported; source-tree
@@ -267,7 +267,7 @@ if(IFE_GENERATED_HEADERS)
 endif()
 add_library(IrisFileExtensionLib OBJECT)
 # Deliberately no link to the IrisHeaders target: the exported package would
-# then carry Iris-Headers' whole install (IrisCore.hpp, IrisCodecCore.hpp —
+# then carry Iris-Headers' whole install (IrisCore.hpp, IrisSlideCore.hpp —
 # downstream runtime/codec concerns). The two headers IFE's public surface
 # includes are on the include paths above and install with IFE's own FILE_SET.
 target_sources (
@@ -287,7 +287,7 @@ target_include_directories (
     IrisFileExtensionLib PRIVATE
     ${IFE_IncludeDir}
 )
-# FetchContent consumers (Iris-Codec) include the PUBLIC headers —
+# FetchContent consumers (Iris-Slide) include the PUBLIC headers —
 # IrisFileExtension.hpp → generated IFE_Blocks.hpp — so
 # src/ and generated_source/ must be on the INTERFACE path too. priv/ stays
 # private on purpose: IrisMemory.hpp must not leak windows.h into consumers.
@@ -365,9 +365,9 @@ endif(IFE_BUILD_STATIC)
 if (${PROJECT_IS_TOP_LEVEL})
     # Iris-Headers is a build-time dependency only. Its target is not exported
     # and its headers do not ship with this package: IFE's public surface
-    # includes exactly IrisTypes.hpp and IrisCodecTypes.hpp, which install
+    # includes exactly IrisTypes.hpp and IrisSlideTypes.hpp, which install
     # with IFE's own FILE_SET below. Its runtime and codec headers
-    # (IrisCore.hpp, IrisCodecCore.hpp) are downstream concerns and stay out
+    # (IrisCore.hpp, IrisSlideCore.hpp) are downstream concerns and stay out
     # of IFE's install.
     install(
         TARGETS ${IFE_Targets}

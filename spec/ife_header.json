@@ -3,7 +3,7 @@
   "name": "Iris File Extension",
   "abbreviation": "IFE",
   "// MARK: - PUBLICATION SOURCES": "Where the specification and its reference implementation live. Stated here rather than typed into the narrative so the document, the README and any future binding cannot disagree about the address.",
-  "repository": "https://github.com/IrisDigitalPathology/Iris-File-Extension",
+  "repository": "https://github.com/Aptix-Bio/Iris-File-Extension",
   "// MARK: - VERSION": "The specification version, emitted as IFE_SCHEMA_VERSION_MAJOR / _MINOR. Every field's 'since' label is bounded by this: a version group newer than the document is a spec error. Append-only is inviolable, so a bump never invalidates a file written under an earlier one.",
   "version": {
     "major": 1,

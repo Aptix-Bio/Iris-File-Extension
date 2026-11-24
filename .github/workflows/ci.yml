@@ -19,7 +19,7 @@ name: CI
 #               neutralization the Bazel rules need on Windows. The test
 #               rules live in tests/tests.bzl (ife_tests), loaded by
 #               BUILD.bazel
-#   downstream  Iris-Codec (the primary consumer) builds against THIS branch
+#   downstream  Iris-Slide (the primary consumer) builds against THIS branch
 #               via a FetchContent source override -- the check that a change
 #               here does not break the ecosystem that depends on it
 #   sanitizers  the packed loads read exactly 3 and exactly 5 bytes. Without
@@ -145,9 +145,9 @@ jobs:
             echo "using ${{ github.repository_owner }}/Iris-Headers"
           else
             echo "no usable ${{ github.repository_owner }}/Iris-Headers" \
-                 "(any clone error above is expected) - falling back to IrisDigitalPathology"
+                 "(any clone error above is expected) - falling back to Aptix-Bio"
             rm -rf ../Iris-Headers
-            git clone --depth 1 https://github.com/IrisDigitalPathology/Iris-Headers.git ../Iris-Headers
+            git clone --depth 1 https://github.com/Aptix-Bio/Iris-Headers.git ../Iris-Headers
           fi
       - uses: bazel-contrib/setup-bazel@0.19.0
         with:
@@ -167,31 +167,31 @@ jobs:
         run: bazel test //... --test_output=errors --verbose_failures --action_env=PATH
 
   downstream:
-    name: Iris-Codec builds against this branch
+    name: Iris-Slide builds against this branch
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # Iris-Codec's CMake FetchContent-pulls IFE from origin/main; the
+      # Iris-Slide's CMake FetchContent-pulls IFE from origin/main; the
       # FETCHCONTENT_SOURCE_DIR override redirects that fetch to THIS
       # checkout — the exact state the PR would ship. Plain git, not
       # actions/checkout: checkout rejects paths outside the workspace.
-      # The clone prefers this owner's Iris-Codec fork, so a fork's CI tests
+      # The clone prefers this owner's Iris-Slide fork, so a fork's CI tests
       # the fork's codec against this IFE state; owners without a codec fork
       # (the CMakeLists.txt probe catches missing and empty ones) fall back
       # to the upstream org.
-      # Build-only, matching Iris-Codec's own CI (which runs no ctest). The
+      # Build-only, matching Iris-Slide's own CI (which runs no ctest). The
       # apt + jpeg-turbo recipe is copied from that CI verbatim.
-      - name: Check out Iris-Codec beside this repository
+      - name: Check out Iris-Slide beside this repository
         shell: bash
         run: |
-          if git clone --depth 1 "https://github.com/${{ github.repository_owner }}/Iris-Codec.git" ../Iris-Codec && \
-             [ -f ../Iris-Codec/CMakeLists.txt ]; then
-            echo "using ${{ github.repository_owner }}/Iris-Codec"
+          if git clone --depth 1 "https://github.com/${{ github.repository_owner }}/Iris-Slide.git" ../Iris-Slide && \
+             [ -f ../Iris-Slide/CMakeLists.txt ]; then
+            echo "using ${{ github.repository_owner }}/Iris-Slide"
           else
-            echo "no usable ${{ github.repository_owner }}/Iris-Codec" \
-                 "(any clone error above is expected) - falling back to IrisDigitalPathology"
-            rm -rf ../Iris-Codec
-            git clone --depth 1 "https://github.com/IrisDigitalPathology/Iris-Codec.git" ../Iris-Codec
+            echo "no usable ${{ github.repository_owner }}/Iris-Slide" \
+                 "(any clone error above is expected) - falling back to Aptix-Bio"
+            rm -rf ../Iris-Slide
+            git clone --depth 1 "https://github.com/Aptix-Bio/Iris-Slide.git" ../Iris-Slide
           fi
       - name: Configure Jpeg-Turbo PPA
         run: |
@@ -203,7 +203,7 @@ jobs:
         run: sudo apt install libhwy-dev libjpeg-turbo-official libavif-dev libpng-dev zlib1g-dev openslide-tools python3-dev meson ninja-build -y
       - name: Configure CMake
         run: >
-          cmake -B build -S ../Iris-Codec
+          cmake -B build -S ../Iris-Slide
           -D CMAKE_BUILD_TYPE=Release
           -D CMAKE_PREFIX_PATH="/opt/libjpeg-turbo/lib64/cmake/libjpeg-turbo/"
           -D TURBOJPEG_INCLUDE="/opt/libjpeg-turbo/include/"

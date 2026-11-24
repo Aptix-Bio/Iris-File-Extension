@@ -234,7 +234,7 @@
               "type": "offset",
               "points_to": "CIPHER",
               "nullable": true,
-              "description": "Offset of the codec cipher block (reserved for the Iris Codec)."
+              "description": "Offset of the codec cipher block (reserved for Iris Slide)."
             },
             {
               "name": "TILE_OFFSETS_OFFSET",
@@ -275,7 +275,7 @@
       "primitive": "BLOCK",
       "recovery_tag": "RECOVER_CIPHER",
       "unspecified": "reserved",
-      "description": "Reserved for future use by the Iris Codec. The block is claimed so its recovery tag and position in the inventory are fixed; encoders write nothing beyond the universal header and readers ignore its contents. TILE_TABLE.CIPHER_OFFSET is nullable and is NULL_OFFSET in every file written to date.",
+      "description": "Reserved for future use by Iris Slide. The block is claimed so its recovery tag and position in the inventory are fixed; encoders write nothing beyond the universal header and readers ignore its contents. TILE_TABLE.CIPHER_OFFSET is nullable and is NULL_OFFSET in every file written to date.",
       "fields": {
         "ife_version": {
           "1.0": []
@@ -292,7 +292,7 @@
             {
               "name": "CODEC_MAJOR",
               "type": "u16",
-              "description": "Major version of the Iris Codec implementation that wrote the file; zero when not applicable."
+              "description": "Major version of the Iris Slide implementation that wrote the file; zero when not applicable."
             },
             {
               "name": "CODEC_MINOR",

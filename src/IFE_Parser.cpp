@@ -120,7 +120,7 @@ Parser Parser::open(const std::filesystem::path& path)
     return Parser(std::make_shared<Parser_t>(info, std::shared_ptr<const void>(std::move(memory))));
 }
 
-Result                   Parser::is_iris_codec_file() const noexcept { return get()->is_iris_codec_file(); }
+Result                   Parser::is_iris_slide_file() const noexcept { return get()->is_iris_slide_file(); }
 Result                   Parser::validate_file_structure() const noexcept { return get()->validate_file_structure(); }
 Abstraction::File        Parser::abstract_file_structure() const { return get()->abstract_file_structure(); }
 const Abstraction::File& Parser::abstraction() const { return get()->abstraction(); }

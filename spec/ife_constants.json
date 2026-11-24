@@ -92,7 +92,7 @@
         },
         "RECOVER_CIPHER": {
           "value": 3,
-          "description": "Tags the CIPHER block, reserved for future Iris Codec use."
+          "description": "Tags the CIPHER block, reserved for future Iris Slide use."
         },
         "RECOVER_METADATA": {
           "value": 4,
@@ -167,7 +167,7 @@
         },
         "TILE_ENCODING_IRIS": {
           "value": 1,
-          "description": "Iris Codec encoding (reserved, unused)."
+          "description": "Iris Slide encoding (reserved, unused)."
         },
         "TILE_ENCODING_JPEG": {
           "value": 2,

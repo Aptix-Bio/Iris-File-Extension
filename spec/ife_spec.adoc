@@ -63,11 +63,11 @@ the address below, and may be consumed in any of the following forms:
 The schema, **the reference implementation**, this document's sources, and the
 release artifacts are all available at:
 
-{repository}[IrisDigitalPathology/Iris-File-Extension]
+{repository}[Aptix-Bio/Iris-File-Extension]
 
-Two projects implement this specification, and they divide by layer and granularity. The reference implementation, below, provides the byte structure and its validation: the blocks, offsets and values this document defines. The Iris Codec Community Module builds on it and provides image compression, decompression and a high-level slide API:
+Two projects implement this specification, and they divide by layer and granularity. The reference implementation, below, provides the byte structure and its validation: the blocks, offsets and values this document defines. The Iris Slide Community Module builds on it and provides image compression, decompression and a high-level slide API:
 
-https://github.com/IrisDigitalPathology/Iris-Codec[IrisDigitalPathology/Iris-Codec]
+https://github.com/Aptix-Bio/Iris-Slide[Aptix-Bio/Iris-Slide]
 
 Implementers writing an encoder or decoder want the schema and the reference
 implementation. Implementers who simply need to *open* a slide want the Codec
@@ -400,7 +400,7 @@ changes what a prior decoder computes.
 
 include::{generated}/layout/CIPHER.adoc[]
 
-The codec cipher is a reserved data-block for future use in the Iris Codec.
+The codec cipher is a reserved data-block for future use in Iris Slide.
 Its offset in the tile table *shall* be encoded as NULL_OFFSET when unused.
 
 [[ife-metadata]]
@@ -409,8 +409,8 @@ Its offset in the tile table *shall* be encoded as NULL_OFFSET when unused.
 include::{generated}/layout/METADATA.adoc[]
 
 * The codec version entries *should* correspond with the major, minor, and
-  build numbers of the Iris Codec implementation that wrote the slide file;
-  they *may* be zero if an Iris Codec module, or derived tool, did not
+  build numbers of the Iris Slide implementation that wrote the slide file;
+  they *may* be zero if an Iris Slide module, or derived tool, did not
   write the file.
 * ATTRIBUTES_OFFSET *should* point to a valid attributes block and
   *shall* be NULL_OFFSET if no attributes are encoded.
