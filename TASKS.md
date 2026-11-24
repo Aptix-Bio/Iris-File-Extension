@@ -95,11 +95,11 @@ wire constant).
 
 ## CI-1 — Every CI job runs on a pinned Blacksmith runner (done, owes its first green run)
 
-**Filed 2026-11-24.** Ryan: "We should be using blacksmith for our CI runners".
+**Filed 2026-11-24.** Decided that day: CI runs on Blacksmith runners.
 GitHub-hosted jobs in Aptix-Bio's private repositories stopped starting over
 billing that day; this repository is public, so its jobs still ran, but all CI
-moves to Blacksmith. A label change, kept minimal under Ryan's rule of the same
-day ("Simplified streamlined workflows are key"). Labels from
+moves to Blacksmith. A label change, kept minimal because the same day's
+decision is that workflows stay simple and streamlined. Labels from
 [Blacksmith's runner overview](https://docs.blacksmith.sh/blacksmith-runners/overview)
 (read 2026-11-24).
 
@@ -130,7 +130,8 @@ day ("Simplified streamlined workflows are key"). Labels from
       Build Tools, which shows MSVC was found.
 - [ ] CI-1.4 **macOS last.** A macOS minute bills as twenty 2-vCPU Linux minutes
       (same page, FAQ); gating the macOS legs on the others (`needs:`) waits for
-      the per-platform reusable workflow of Ryan's 2026-11-24 rule ("unified
-      workflows with good Cmake subscripts").
+      the per-platform reusable workflow decided 2026-11-24 (unified
+      workflows whose steps are CMake scripts, so a step runs the same
+      locally and in CI).
 - [ ] CI-1.5 Record in `development/WBS.md` and `development/RTM.md` once those
       files are committed (they exist only as untracked files on 2026-11-24).

@@ -36,10 +36,10 @@ name: CI
 # The pattern across the last three: a branch no developer machine executes is
 # a branch no test can check, so each gets a job rather than a comment.
 #
-# Runners (CI-1 in TASKS.md; Ryan, 2026-11-24: "We should be using blacksmith
-# for our CI runners"): every job runs on a Blacksmith runner at a label
-# documented in https://docs.blacksmith.sh/blacksmith-runners/overview (read
-# 2026-11-24), pinned to the OS version the -latest label ran:
+# Runners (CI-1 in TASKS.md, decided 2026-11-24): every job runs on a
+# Blacksmith runner at a label documented in
+# https://docs.blacksmith.sh/blacksmith-runners/overview (read 2026-11-24),
+# pinned to the OS version the -latest label ran:
 #   Linux    blacksmith-2vcpu-ubuntu-2404   2 vCPU, 8 GB
 #   Windows  blacksmith-2vcpu-windows-2025  2 vCPU, 7 GB; public beta, with
 #            Visual Studio Build Tools 2022 in place of the full IDE

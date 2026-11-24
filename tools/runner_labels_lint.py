@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail when a workflow job would run anywhere but a pinned Blacksmith runner.
 
-Ryan, 2026-11-24: "We should be using blacksmith for our CI runners". A
+Decided 2026-11-24: CI runs on Blacksmith runners. A
 GitHub-hosted label (ubuntu-24.04, macos-26, windows-2025) bills GitHub
 minutes, which stopped starting jobs in Aptix-Bio's private repositories that
 day; a -latest label lets the image move under a passing build (Arbiter
