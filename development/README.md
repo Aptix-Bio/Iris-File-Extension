@@ -54,8 +54,8 @@ stated as plain requirements) · Measurements · Test results (per cell) · Red
 first · Failures fixed · Consumer impact · Security impact · AI authorship.
 
 **Naming.** A work item keeps the ID it was given (`RB-5`, `RC-10.4`, `R-3.1`,
-`VL-1.2`, `CI-3.6`): a two- or three-letter series, a package number and a
-step number. A new item takes the next number in its series. An RTM row is
+`VL-1.2`, `CI-3.6`, `OD-R1`): a series (`RB`, `R`, `CI`, `OD-R`), a package
+number and an optional step number. A new item takes the next number in its series. An RTM row is
 `PascalCaseArea_<nn>` (`Read_01`).
 
 **Update rule.** A commit that changes code updates the WBS items it completes

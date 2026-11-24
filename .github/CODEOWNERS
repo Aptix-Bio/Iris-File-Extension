@@ -16,5 +16,5 @@
 /cmake/                             @ryanlandvater
 /spec/                              @ryanlandvater
 /tests/wire/witness.json            @ryanlandvater
-/development/style_guide.md         @ryanlandvater
-/development/ci_runners.md          @ryanlandvater
+/development/*.md                   @ryanlandvater
+/tools/                             @ryanlandvater
