@@ -180,9 +180,14 @@ set (
     ${irisheaders_SOURCE_DIR}/include/IrisTypes.hpp
     ${irisheaders_SOURCE_DIR}/include/IrisSlideTypes.hpp
 )
-# IFE_Window.{hpp,cpp} is Emscripten-only (the WASM remote windowed fetch)
-# and the installed package is native, so it is not exported; source-tree
-# consumers (FetchContent, WASM) still get it via IFE_SourcesPriv.
+# IFE_Window.{hpp,cpp} is Emscripten-only (the WASM remote windowed fetch).
+# A native install leaves its header out. An Emscripten install carries it,
+# since IrisFileExtension.hpp includes it under __EMSCRIPTEN__: Iris-Slide's
+# JavaScript module links an installed wasm32-emscripten IFE through vcpkg
+# (Iris-Slide VcpkgCaching_2), and failed with "'IFE_Window.hpp' file not found".
+if(EMSCRIPTEN)
+    list(APPEND IFE_SourcesExport ${IFE_INCLUDE_DIR}/IFE_Window.hpp)
+endif()
 set (
     IFE_SourcesPriv
     ${IFE_SOURCE_DIR}/IFE_Runtime.cpp
