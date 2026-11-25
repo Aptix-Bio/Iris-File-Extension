@@ -6,7 +6,7 @@ values, primitive inheritance, every field's (name, type, width, offset) per
 version group, array entry sizes per version group, enum members and
 statically defined values — derived from `spec/*.json` through
 `generator.model.layout.derive_layout`, the same derivation the emitters and
-the reader use. `python3 -m generator --validate` recomputes it and fails if
+the reader use. `python3 generate_IFE.py --validate` recomputes it and fails if
 anything a shipped revision recorded has changed or disappeared; additions
 pass silently, because that is what append-only means.
 

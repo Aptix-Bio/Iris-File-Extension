@@ -2,7 +2,7 @@
 
 The Iris File Extension is specified by four documents that together are the
 **single source of truth** for the C++ serialization layer
-(`generator/` → `generated_source/`), the LaTeX specification document, and
+(`generate_IFE.py` → `generated_source/` in the build tree), the LaTeX specification document, and
 the HTML documentation (`generated_docs`) to generate .iris whole slide images:
 
 | File | Role |
@@ -37,7 +37,7 @@ needs `if`, the answer is no.
 
 ## Checking the documents
 
-`python3 -m generator --validate` runs before every generation and in CI. It
+`python3 generate_IFE.py --validate` runs before every generation and in CI. It
 catches what layout derivation does not care about but a *file* does:
 
 * **Recovery-tag conflicts** — two blocks sharing a tag, an unknown tag, a tag
@@ -274,8 +274,8 @@ generated layout with IFE 1.0 is what holds them true.
     rather than inside it, so the property above is unchanged and a 1.0
     reader cannot tell a framed file from an unframed one.
 
-No size or offset is restated here, deliberately — `python3 -m generator`
-prints every derived block size, and `generated_docs/layout/` carries the
+No size or offset is restated here, deliberately — `python3 generate_IFE.py`
+prints every derived block size, and its `generated_docs/layout/` carries the
 tables. A number transcribed into prose is a number that can disagree with the
 schema.
 

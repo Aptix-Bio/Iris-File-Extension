@@ -127,9 +127,9 @@ if(IFE_BUILD_TESTS)
 
     # The manifest, projected into a header the harness can read. This
     # repository has no JSON library and wants none, so the committed record
-    # is generated into C++ at configure and gitignored — the same
+    # is generated into C++ at configure, in this build's tree — the same
     # arrangement as the version-gating fixture below.
-    set(IFE_CORPUS_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/corpus)
+    set(IFE_CORPUS_FIXTURE_DIR ${CMAKE_CURRENT_BINARY_DIR}/tests/fixtures/corpus)
     execute_process(
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/corpus_manifest_header.py
@@ -371,10 +371,10 @@ if(IFE_BUILD_TESTS)
     # on purpose: it proves the comparison is numeric, and stays a valid
     # future version for decades.
     #
-    # The fixture lives under the test suite (tests/fixtures/future_versioning/),
-    # generated at configure time and gitignored — the same arrangement as
-    # generated_source/.
-    set(IFE_FUTURE_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/future_versioning)
+    # The fixture is generated at configure into this build's
+    # tests/fixtures/future_versioning/ — the same arrangement as the
+    # production generated_source/ (R-7).
+    set(IFE_FUTURE_FIXTURE_DIR ${CMAKE_CURRENT_BINARY_DIR}/tests/fixtures/future_versioning)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     execute_process(
         COMMAND ${Python3_EXECUTABLE}
@@ -387,11 +387,10 @@ if(IFE_BUILD_TESTS)
         message(FATAL_ERROR "IFE fixture spec builder failed — see output above")
     endif()
     execute_process(
-        COMMAND ${Python3_EXECUTABLE} -m generator
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate_IFE.py
                 --schema-dir ${IFE_FUTURE_FIXTURE_DIR}
                 --out-dir ${IFE_FUTURE_FIXTURE_DIR}/generated
                 --docs-dir ${IFE_FUTURE_FIXTURE_DIR}/generated_docs
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         RESULT_VARIABLE IFE_FIXTURE_GEN_RESULT
     )
     if(NOT IFE_FIXTURE_GEN_RESULT EQUAL 0)
@@ -597,7 +596,7 @@ if(IFE_BUILD_TESTS)
     # writer built from the committed spec can only emit 1.1 because store()
     # always lays out the newest version. The same derive-don't-copy
     # arrangement as the 200.0 fixture above, in the other direction.
-    set(IFE_BASELINE_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/baseline_versioning)
+    set(IFE_BASELINE_FIXTURE_DIR ${CMAKE_CURRENT_BINARY_DIR}/tests/fixtures/baseline_versioning)
     execute_process(
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/build_baseline_spec.py
@@ -609,11 +608,10 @@ if(IFE_BUILD_TESTS)
         message(FATAL_ERROR "IFE baseline fixture spec builder failed — see output above")
     endif()
     execute_process(
-        COMMAND ${Python3_EXECUTABLE} -m generator
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate_IFE.py
                 --schema-dir ${IFE_BASELINE_FIXTURE_DIR}
                 --out-dir ${IFE_BASELINE_FIXTURE_DIR}/generated
                 --docs-dir ${IFE_BASELINE_FIXTURE_DIR}/generated_docs
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         RESULT_VARIABLE IFE_BASELINE_GEN_RESULT
     )
     if(NOT IFE_BASELINE_GEN_RESULT EQUAL 0)

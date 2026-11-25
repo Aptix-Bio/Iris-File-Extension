@@ -3,8 +3,8 @@ name: CI
 # The gates, in one place. Eight jobs, each pinning a
 # property nothing else can:
 #
-#   spec        the JSON is self-consistent, and generated_source/ is what the
-#               current spec produces (the drift gate)
+#   spec        the JSON is self-consistent, and the generated layer is what
+#               the current spec produces (the drift gate)
 #   tests       the generated layer and the primitives behave -- including the
 #               v1 oracle, the only test that reads bytes the shipped encoder
 #               wrote rather than another description of the format. Run on
@@ -67,9 +67,9 @@ jobs:
       # request's code, widen a job's token, or move a secret.
       - name: The review bot's workflow stays safe under pull_request_target
         run: cmake -P cmake/check_review_configuration.cmake
-      - run: python3 -m generator --validate
-      - run: python3 -m generator
-      - run: python3 -m generator --check
+      - run: python3 generate_IFE.py --validate
+      - run: python3 generate_IFE.py
+      - run: python3 generate_IFE.py --check
       # Determinism (XP-3): two generator runs must be byte-identical. The
       # seeds are the point — dict/set iteration order varies with
       # PYTHONHASHSEED, which is where non-determinism enters. ctest covers
@@ -78,7 +78,7 @@ jobs:
         run: PYTHONHASHSEED=0 python3 tests/generator/test_determinism.py
       - name: Generator determinism (seed 1)
         run: PYTHONHASHSEED=1 python3 tests/generator/test_determinism.py
-      - name: Generator -d resolves paths against the named directory
+      - name: generate_IFE.py runs from any directory; -d names the root
         run: python3 tests/generator/test_directory_flag.py
       - name: Retired enum members are validated, emitted and off the wire
         run: python3 tests/generator/test_deprecated.py
@@ -137,7 +137,7 @@ jobs:
       # makes one line work on every runner.
       - name: Configure
         run: >
-          cmake -B build -DIFE_BUILD_TESTS=ON -DIFE_RUN_GENERATOR=ON
+          cmake -B build -DIFE_BUILD_TESTS=ON
           -DCMAKE_BUILD_TYPE=Release
           ${{ matrix.generator && format('-G {0}', matrix.generator) || '' }}
           ${{ matrix.cxx && format('-DCMAKE_CXX_COMPILER={0}', matrix.cxx) || '' }}
@@ -260,7 +260,7 @@ jobs:
           key: corpus-${{ hashFiles('tests/corpus/manifest.json') }}
       - name: Configure with ASan + UBSan
         run: >
-          cmake -B build-asan -DIFE_BUILD_TESTS=ON -DIFE_RUN_GENERATOR=ON
+          cmake -B build-asan -DIFE_BUILD_TESTS=ON
           -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"

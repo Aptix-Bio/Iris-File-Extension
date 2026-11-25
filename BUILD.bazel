@@ -6,8 +6,9 @@
 # include-order guarantees for the version-gating tests. Requires Bazel 7+
 # (bzlmod). Differences forced by Bazel:
 #
-#   - generated_source/ is NEVER committed; a genrule runs generator/ at
-#     build time. Needs python3 on PATH, exactly like CMake's configure step.
+#   - The generated layer is a genrule output: generate_IFE.py writes it into
+#     $(RULEDIR) at build time, as CMake writes it into its binary directory
+#     at configure. Needs python3 on PATH, exactly like CMake's configure step.
 #   - The test suite is declared in tests/tests.bzl as one ife_tests() macro;
 #     this file calls it (see the Tests section below).
 #   - Runfiles cannot hand a test a directory. The corpus tests receive the
@@ -58,12 +59,13 @@ _COPTS = select({
 _EXPORT_DEFINES = ["IRIS_EXPORT="]
 
 # ── Generated serialization layer ──────────────────────────────────────────
-# spec/*.json is the single source of truth; generated_source/ is gitignored.
-# The generator is stdlib-only Python. A spec or generator change re-runs the
-# genrule — the same drift the CI `python3 -m generator --check` job gates.
+# spec/*.json is the single source of truth; the generated layer is a build
+# product. The generator is stdlib-only Python. A spec or generator change
+# re-runs the genrule — the same drift the CI `generate_IFE.py --check` step
+# gates.
 genrule(
     name = "generated_sources",
-    srcs = glob(["spec/ife_*.json"]) + glob(["generator/**/*.py"]),
+    srcs = ["generate_IFE.py"] + glob(["spec/ife_*.json"]) + glob(["generator/**/*.py"]),
     outs = [
         "generated_source/IFE_Blocks.hpp",
         "generated_source/IFE_Blocks.cpp",
@@ -71,12 +73,13 @@ genrule(
         "generated_source/IFE_Validation.hpp",
         "generated_source/IFE_Validation.cpp",
     ],
-    # The genrule's cwd is the workspace root, so `python3 -m generator`
-    # resolves; the schema dir is spelled out so nothing depends on that.
-    # The generator is stdlib-only; the interpreter is resolved by
-    # //:python_resolve.bzl (guards against the Windows Store-stub trap).
+    # -d . resolves every path against the genrule's cwd, the execution
+    # root, where $(RULEDIR) and $(location) are relative; the schema dir is
+    # spelled out so nothing depends on the default. The generator is
+    # stdlib-only; the interpreter is resolved by //:python_resolve.bzl
+    # (guards against the Windows Store-stub trap).
     cmd = PYTHON_RESOLVE +
-          "$$PY -m generator " +
+          "$$PY $(location generate_IFE.py) -d . " +
           "--schema-dir $$(dirname $(location spec/ife_header.json)) " +
           "--out-dir $(RULEDIR)/generated_source " +
           "--docs-dir $(RULEDIR)/generated_docs",

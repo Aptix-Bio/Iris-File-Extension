@@ -11,12 +11,13 @@ before opening a PR.
    a field that already exists in `spec/*.json`. New facts arrive only by
    *addition* — a new version group, a new field at the end of a group, a new
    block with a new recovery tag — and retirement happens only via
-   `deprecated`. `python3 -m generator --validate` enforces this against the
+   `deprecated`. `python3 generate_IFE.py --validate` enforces this against the
    committed witness; a PR that breaks it will be rejected regardless of its
    other merits.
-2. **Never hand-edit generated output.** `generated_source/` and
-   `generated_docs/` carry a DO-NOT-EDIT banner and are overwritten at
-   configure time. Fix the emitter in `generator/emit/` and regenerate.
+2. **Never hand-edit or commit generated output.** `generated_source/` and
+   `generated_docs/` are build products, written by `generate_IFE.py` into the
+   build directory at configure time, with a DO-NOT-EDIT banner. Fix the
+   emitter in `generator/emit/` and regenerate.
 3. **`tests/wire/witness.json` is evidence, not output.** It is committed on
    purpose — the gate compares against it — and is refreshed only as part of a
    reviewed wire change (see "What a wire change requires" below). A witness
@@ -38,7 +39,7 @@ guards are not interchangeable:
 | | `tests/wire/witness.json` — the contract | `tests/corpus/*.test_slide` — the bytes |
 |---|---|---|
 | What it is | Every fact the spec puts on the wire — recovery tags, per-version field (name, type, width, offset), entry sizes, enum values, named constants — derived from `spec/*.json` through `generator.model.layout.derive_layout`, the same derivation the emitters use | Real files on disk, pinned by SHA-256, hosted on Cloudflare R2 |
-| When it runs | `python3 -m generator --validate` — before generation, before any C++ compiles, in CI | `ctest` — after a full build |
+| When it runs | `python3 generate_IFE.py --validate` — before generation, before any C++ compiles, in CI | `ctest` — after a full build |
 | Coverage | **All 18 blocks, every version group, every enum member, every constant** | **All 18 block types**, plus the optional tile frame, across one frozen witness per version (1.0 and 1.1) and a `CIPHER` variant — so 1.1 additions are covered by real bytes, not only by the contract |
 | What it catches | Any shipped field moved, widened, retyped or removed; any enum or constant value changed | Anything that stops a real file decoding end-to-end — including derivation bugs the witness shares with the generator |
 | What it permits | Additions, silently — that is what append-only means | — |
@@ -59,7 +60,7 @@ neither replaces the other.
 ## What a wire change requires
 
 1. Edit `spec/*.json` append-only — addition, never mutation.
-2. `python3 -m generator --validate` stays green (the gate permits additions).
+2. `python3 generate_IFE.py --validate` stays green (the gate permits additions).
 3. Refresh `tests/wire/witness.json` deliberately, in the same change. A
    baseline that does not record a new field cannot catch that field's later
    mutation — the refresh is what keeps the gate growing with the spec. CI
@@ -78,8 +79,8 @@ neither replaces the other.
 ## Build & test
 
 ```bash
-python3 -m generator --validate        # spec consistency + append-only gate
-python3 -m generator && python3 -m generator --check
+python3 generate_IFE.py --validate     # spec consistency + append-only gate
+python3 generate_IFE.py && python3 generate_IFE.py --check   # into build/generated_source/
 cmake . -B build -DIFE_BUILD_TESTS=ON && cmake --build build --config Release -j \
   && ctest --test-dir build -C Release --output-on-failure
 ```
@@ -106,8 +107,10 @@ Traps that have already cost this project time:
   found" and that reads as success.
 - Chain build and test with `&&` — ctest reports PASS from stale binaries
   after a failed build.
-- After changing `spec/*.json` or an emitter, run `cmake .` (configure), not
-  just `cmake --build` — fixtures are generated at configure time.
+- The generated layer and the test fixtures are generated at configure time,
+  into the build directory. The spec, the witness and the generator are
+  configure dependencies, so `cmake --build` after an edit reconfigures and
+  regenerates first.
 - The corpus is fetched at configure into `.deps/corpus/`, inside the
   `if(IFE_BUILD_TESTS)` guard, and a failed fetch is a `message(FATAL_ERROR)`
   (`tests/tests.cmake`). It breaks the whole configure, not just the corpus

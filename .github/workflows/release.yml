@@ -1,7 +1,7 @@
 name: Release
 
 # The release pipeline, and the sentence in README.md it exists to make true:
-# pre-compiled binaries "for all major systems under the releases tab". Four
+# pre-compiled binaries "for all major systems under the releases tab". Five
 # jobs:
 #
 #   verify    the tag, the version spec/ife_header.json declares, and that
@@ -11,6 +11,7 @@ name: Release
 #             archived
 #   document  the specification PDF and HTML, through build_document.sh's three
 #             gates
+#   generated the generated C++ layer, archived
 #   publish   one release carrying all of it, pinned by SHA256SUMS
 #
 # No tag has ever been cut on this repository, so this is written to be
@@ -102,10 +103,10 @@ jobs:
           if [ -n "${{ matrix.osx_archs }}" ]; then
             extra+=("-DCMAKE_OSX_ARCHITECTURES=${{ matrix.osx_archs }}")
           fi
-          # IFE_RUN_GENERATOR is not optional here. generated_source/ is
-          # gitignored, so a release builds the C++ layer from spec/*.json in
-          # this same run or it does not build at all.
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DIFE_RUN_GENERATOR=ON "${extra[@]}"
+          # The configure generates the C++ layer from spec/*.json into
+          # build/, so the release builds from this run's spec and nothing
+          # generated is committed.
+          cmake -B build -DCMAKE_BUILD_TYPE=Release "${extra[@]}"
 
       - name: Build
         run: cmake --build build --config Release
@@ -202,12 +203,41 @@ jobs:
           path: doc/
           if-no-files-found: error
 
+  # The generated C++ layer, archived beside the packages. Nothing generated
+  # is committed (R-7), so a consumer without Python, or one compiling
+  # IFE_Blocks.hpp in another build system, takes it from the release instead
+  # of running generate_IFE.py. It is the command CMake runs at configure, so
+  # the archive holds what every package was built from. The specification's
+  # tables ship rendered, in the document job's PDF and HTML, under the
+  # specification's own terms; this archive carries the code's licence.
+  generated:
+    name: generated source
+    needs: verify
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
+    env:
+      PKG: IrisFileExtension-${{ needs.verify.outputs.version }}-generated-source
+    steps:
+      - uses: actions/checkout@v7
+      - name: Generate
+        run: python3 generate_IFE.py --out-dir "$PWD/stage/$PKG/generated_source"
+      - name: Add the licence
+        run: cp LICENSE "stage/$PKG/"
+      - name: Archive
+        working-directory: stage
+        run: tar -czf "$PKG.tar.gz" "$PKG"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.PKG }}
+          path: stage/${{ env.PKG }}.tar.gz
+          if-no-files-found: error
+
   publish:
     name: publish the release
     # Never on a dispatch run: that build exists to prove the packaging, and a
     # branch has no tag to publish under.
     if: github.ref_type == 'tag'
-    needs: [verify, package, document]
+    needs: [verify, package, document, generated]
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:

@@ -48,7 +48,6 @@ option(IFE_BUILD_SHARED "Build shared Iris File Extension Libraries" ON)
 option(IFE_BUILD_STATIC "Build static Iris File Extension Libraries" ON)
 option(IFE_BUILD_EXAMPLES "Build shared Iris File Extension Example implementations" OFF)
 option(IFE_BUILD_TESTS "Build IFE unit/stress tests" OFF)
-option(IFE_RUN_GENERATOR "Regenerate generated_source/ at configure (requires generator/)" OFF)
 # Disables ONLY the corpus conformance test target. It never disables the
 # corpus fetch: the oracle, the runtime tests and the >4 GiB test all read
 # the fetched snapshot, so a build without it is not a build.
@@ -218,58 +217,58 @@ set (
 find_package(Threads REQUIRED)
 list(APPEND IFE_Dependencies Threads::Threads)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Generated source (generated_source/) and generated docs
-# (generated_docs/) — generator pipeline output. Both are gitignored and
-# freely regenerable; the committed spec JSON is the source of truth.
-# Generation runs only when the pipeline exists, and only then if
-# IFE_RUN_GENERATOR=ON or the anchor file is missing.
+# The generated layer: generate_IFE.py renders spec/*.json into C++
+# (generated_source/) and the specification's tables (generated_docs/) in
+# this build's own tree, as Bazel's genrule writes into $(RULEDIR). In the
+# source tree the output sat beside committed files and every build directory
+# of a checkout shared, and overwrote, one copy (R-7). The generator runs at
+# every configure: it writes only files whose content changed, so an
+# unchanged spec rebuilds nothing. Its inputs are configure dependencies, so
+# an edit to the spec, the witness or the generator reconfigures and
+# regenerates before the next build compiles.
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-set(IFE_GENERATED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/generated_source")
-set(IFE_DOCS_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/generated_docs")
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/generator/pipeline.py)
-    if(IFE_RUN_GENERATOR OR NOT EXISTS "${IFE_GENERATED_DIR}/IFE_Blocks.hpp")
-        find_package(Python3 REQUIRED COMPONENTS Interpreter)
-        execute_process(
-            COMMAND ${Python3_EXECUTABLE} -m generator
-                    --out-dir ${IFE_GENERATED_DIR}
-                    --docs-dir ${IFE_DOCS_DIR}
-            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-            RESULT_VARIABLE IFE_GEN_RESULT
-        )
-        if(NOT IFE_GEN_RESULT EQUAL 0)
-            message(FATAL_ERROR "IFE code generator failed — see output above")
-        endif()
-    endif()
+set(IFE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_source")
+set(IFE_DOCS_DIR      "${CMAKE_CURRENT_BINARY_DIR}/generated_docs")
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate_IFE.py
+            --out-dir ${IFE_GENERATED_DIR}
+            --docs-dir ${IFE_DOCS_DIR}
+    RESULT_VARIABLE IFE_GEN_RESULT
+)
+if(NOT IFE_GEN_RESULT EQUAL 0)
+    message(FATAL_ERROR "IFE code generator failed — see output above")
 endif()
-# Single GLOB per configure, always after the generator block so a fresh
-# checkout with an empty generated_source/ still compiles what the
-# generator just produced.
-file(GLOB IFE_GENERATED_SOURCES CONFIGURE_DEPENDS ${IFE_GENERATED_DIR}/*.cpp)
+file(GLOB_RECURSE IFE_GENERATOR_INPUTS CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/generator/*.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/spec/*.json)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${IFE_GENERATOR_INPUTS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/generate_IFE.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/spec/ife_spec.adoc
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/wire/witness.json)
+# One GLOB per configure, after the generator: the set of generated files is
+# the one pipeline.py::_render defines, so it is not listed a second time here.
+file(GLOB IFE_GENERATED_SOURCES ${IFE_GENERATED_DIR}/*.cpp)
 # The conformance layer is a development tool, not a production
 # dependency: it ships as its own target so an application links
 # it only when it wants validation.  Keep it out of the library's sources.
 set(IFE_VALIDATION_SOURCE ${IFE_GENERATED_DIR}/IFE_Validation.cpp)
 list(REMOVE_ITEM IFE_GENERATED_SOURCES ${IFE_VALIDATION_SOURCE})
-file(GLOB IFE_GENERATED_HEADERS CONFIGURE_DEPENDS ${IFE_GENERATED_DIR}/*.hpp)
+file(GLOB IFE_GENERATED_HEADERS ${IFE_GENERATED_DIR}/*.hpp)
 # The conformance layer is a development tool: its header ships only with
 # the validation library (which this repo does not install), never with the
 # base install.
 list(FILTER IFE_GENERATED_HEADERS EXCLUDE REGEX "IFE_Validation\\.hpp$")
-if(IFE_GENERATED_SOURCES OR IFE_GENERATED_HEADERS)
-    list(APPEND IFE_SourcesPriv   ${IFE_GENERATED_SOURCES})
-    list(APPEND IFE_SourcesExport ${IFE_GENERATED_HEADERS})
-    list(APPEND IFE_IncludeDir    ${IFE_GENERATED_DIR})
-    message(STATUS "IFE: compiling generated sources from ${IFE_GENERATED_DIR}")
-endif()
-# Generated headers live under their own base dir for the FILE_SET; keep
-# the base list conditional so an empty generated_source/ (before the first
-# generation) never references a nonexistent directory.
-set(IFE_FILE_SET_BASE_DIRS ${IFE_INCLUDE_DIR})
-# The two Iris-Headers headers above are under their own base dir.
-list(APPEND IFE_FILE_SET_BASE_DIRS ${irisheaders_SOURCE_DIR}/include)
-if(IFE_GENERATED_HEADERS)
-    list(APPEND IFE_FILE_SET_BASE_DIRS ${IFE_GENERATED_DIR})
-endif()
+list(APPEND IFE_SourcesPriv   ${IFE_GENERATED_SOURCES})
+list(APPEND IFE_SourcesExport ${IFE_GENERATED_HEADERS})
+list(APPEND IFE_IncludeDir    ${IFE_GENERATED_DIR})
+# The generated headers install from their own base dir in the FILE_SET; the
+# two Iris-Headers headers above from theirs.
+set(IFE_FILE_SET_BASE_DIRS
+    ${IFE_INCLUDE_DIR}
+    ${irisheaders_SOURCE_DIR}/include
+    ${IFE_GENERATED_DIR})
 add_library(IrisFileExtensionLib OBJECT)
 # Deliberately no link to the IrisHeaders target: the exported package would
 # then carry Iris-Headers' whole install (IrisCore.hpp, IrisSlideCore.hpp —
@@ -294,7 +293,7 @@ target_include_directories (
 )
 # FetchContent consumers (Iris-Slide) include the PUBLIC headers —
 # IrisFileExtension.hpp → generated IFE_Blocks.hpp — so
-# src/ and generated_source/ must be on the INTERFACE path too. priv/ stays
+# src/ and this build's generated_source/ must be on the INTERFACE path too. priv/ stays
 # private on purpose: IrisMemory.hpp must not leak windows.h into consumers.
 # $<BUILD_INTERFACE:...>: the paths are build-tree absolute and must not be
 # exported to the install package (installed headers land flat in include/Iris).

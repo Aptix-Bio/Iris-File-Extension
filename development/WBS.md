@@ -400,7 +400,7 @@ found and closed (the global tile indexing):
 - [ ] **R-3.1 — Ratify the revision.** `spec/ife_header.json` carries 1.1 as
   `"status": "draft"`. Set it ratified with an ISO date (`generator/validate.py`
   requires one). Held by decision (2026-08-19) until the migration is reviewed.
-  **Done when:** `python3 -m generator --validate` exits 0 and the rendered
+  **Done when:** `python3 generate_IFE.py --validate` exits 0 and the rendered
   cover no longer says draft.
 - [ ] **R-3.2 — Refresh the wire witness** in the same change if the spec moved
   (`tools/refresh_witness.py`); `--check` fails until it does.
@@ -463,16 +463,8 @@ copy. `release.yml` archives the same output as
 Python takes the generated layer from the release. Branch
 `feature/ReviewBot_CI-3`, pull request #6. [Spec_01, Release_04]
 
-- [ ] R-7.1 **Red first.** `tests/generator/test_out_of_source.py` (ctest
-      `ife_generated_out_of_source`) requires the build to compile the layer
-      from outside the source tree and the source tree to hold no
-      `generated_source/` or `generated_docs/`; `tests/generator/test_directory_flag.py`
-      runs `generate_IFE.py` by path from another directory.
-- [ ] R-7.2 **Green.** `generate_IFE.py` added and every caller switched to
-      it; CMake generates into `${CMAKE_CURRENT_BINARY_DIR}` at every
-      configure, the spec and generator files as configure dependencies, and
-      `IFE_RUN_GENERATOR` removed; the test fixtures move to the binary
-      directory too; `release.yml` publishes the generated-source archive.
+- [x] R-7.1 **Red first.** `tests/generator/test_out_of_source.py` (ctest `ife_generated_out_of_source`) requires the build to compile the layer from outside the source tree and the source tree to hold no `generated_source/` or `generated_docs/`: it failed three ways against the old layout ("the build compiles the generated layer from the source tree", and both directories present). `tests/generator/test_directory_flag.py` runs `generate_IFE.py` by path from another directory with PYTHONPATH unset and failed with "can't open file .../generate_IFE.py". [26954ee](https://github.com/Aptix-Bio/Iris-File-Extension/commit/26954ee3fb3ae65e18491561db54e298941ddc3e)
+- [x] R-7.2 **Green.** `generate_IFE.py` added and every caller switched to it (`generator/__main__.py` became `generator/cli.py`, so there is one way to run it); CMake generates into `${CMAKE_CURRENT_BINARY_DIR}` at every configure with the spec, the witness and the generator as configure dependencies, and `IFE_RUN_GENERATOR` is removed; the three test fixtures and the corpus manifest header move to the binary directory too; `release.yml`'s `generated` job archives the C++ layer for `publish`. From a clean build directory, ctest 27 of 27 (Release, examples on); touching `spec/ife_fields.json` reconfigures and regenerates on `cmake --build`; `--validate`, `--check`, determinism under two seeds, `test_directory_flag.py`, `test_deprecated.py`, both lints, the review-configuration check and `spec/build_document.sh` pass; the install tree carries the generated headers and `tools/package_smoke` links and runs against it; a FetchContent consumer compiles `IFE_Blocks.hpp` from `_deps/.../generated_source/`; Bazel's generator genrules (`:generated_sources`, `:future_generated`) build in the sandbox; its C++ targets did not compile on the development Mac, where rules_cc's own `runfiles.cc` fails the same absolute-path inclusion check on the Xcode SDK, so `bazel test` is left to CI. After all of it the source tree holds no generated file and `git status` shows only the change.
 - [ ] R-7.3 **VERIFY:** the first `release.yml` run by `workflow_dispatch`
       uploads the generated-source archive beside the packages.
 

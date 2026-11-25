@@ -4,25 +4,23 @@
     {
       "name": "xcode",
       "displayName": "Xcode (build-xcode)",
-      "description": "Xcode project with tests enabled; regenerates generated_source/ at configure.",
+      "description": "Xcode project with tests enabled.",
       "generator": "Xcode",
       "binaryDir": "${sourceDir}/build-xcode",
       "cacheVariables": {
-        "IFE_BUILD_TESTS": "ON",
-        "IFE_RUN_GENERATOR": "ON"
+        "IFE_BUILD_TESTS": "ON"
       }
     },
     {
       "name": "ninja",
       "displayName": "Ninja, Debug (build-ninja)",
-      "description": "Command-line build with tests and examples; regenerates generated_source/ at configure.",
+      "description": "Command-line build with tests and examples.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-ninja",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "IFE_BUILD_TESTS": "ON",
-        "IFE_BUILD_EXAMPLES": "ON",
-        "IFE_RUN_GENERATOR": "ON"
+        "IFE_BUILD_EXAMPLES": "ON"
       }
     },
     {
@@ -46,7 +44,6 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "IFE_BUILD_TESTS": "ON",
-        "IFE_RUN_GENERATOR": "ON",
         "IFE_HOST_BYTE_ORDER": "big"
       }
     }

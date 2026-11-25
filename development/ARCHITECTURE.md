@@ -41,7 +41,7 @@ and the record it comes from.
 
 | # | Decision | Why | Date · record |
 |---|---|---|---|
-| D1 | **The JSON documents in `spec/` are the one source of every wire fact.** Offsets, sizes, recovery tags and enumeration values are derived by the stdlib-only generator (`python3 -m generator`) into `generated_source/` and `generated_docs/`, which are rebuilt at configure and never edited; a fix goes into `generator/emit/`. | A fact stated twice can disagree; the generator derives the layout so that parity with the shipped format is checked by a gate (`--check`) instead of maintained by hand. | 2026-08-06 · [migration phases](analysis/migration_phases_1_to_6.md), Phases 1–3 |
+| D1 | **The JSON documents in `spec/` are the one source of every wire fact.** Offsets, sizes, recovery tags and enumeration values are derived by the stdlib-only generator (`python3 generate_IFE.py`) into `generated_source/` and `generated_docs/`, which are rebuilt at configure and never edited; a fix goes into `generator/emit/`. *Amended 2026-11-25 (R-7):* both are build products, written into the build directory (CMake's binary directory, Bazel's `$(RULEDIR)`) and never into the source tree or committed; each release attaches the generated C++ as an archive. | A fact stated twice can disagree; the generator derives the layout so that parity with the shipped format is checked by a gate (`--check`) instead of maintained by hand. | 2026-08-06 · [migration phases](analysis/migration_phases_1_to_6.md), Phases 1–3 |
 | D2 | **Append-only.** A fact already in a version group is never moved, resized, retyped, renamed or removed; additions arrive as new version groups, fields at a group's end, or new blocks with new recovery tags; retirement is a `deprecated` mark (`{version, reason}`). `tests/wire/witness.json` records every shipped fact, and `--validate` refuses a change that breaks it. | Every file written under an earlier revision stays readable by every later reader; the witness turns the rule into a gate. | 2026-08-18 · XP-1, [cross-pollination](analysis/cross_pollination_2026-08-18.md); amended 2026-11-25: D26 renames one shipped enumeration member, recorded in `tests/wire/README.md` |
 | D3 | **Byte-for-byte parity with the shipped 1.0 format.** The schema describes the bytes 1.0 encoders wrote; 1.1 is additive (`TILE_LENGTH`, `Z_PLANES`, `MICRONS_PLANE`, tile frames' optional trailer, `CLINICAL_METADATA`). Real files exist, so a reader that disagrees with them is the defect. | Decisions 4.0-G and 4.0-H. | 2026-08-06 · [migration phases](analysis/migration_phases_1_to_6.md), §4.0 |
 | D4 | **Little-endian on disk at every version, on every host.** File bytes are read and written only through `IFE_Bytes.hpp` or the generated handles. The `big-endian (s390x)` CI job runs the suite on a big-endian host under emulation. | A cast of a file pointer to a multi-byte type reads garbage on a big-endian host; the s390x job is the evidence. | 2026-11-24 · CI-2 |
@@ -95,8 +95,8 @@ from it.
 ```mermaid
 flowchart TD
     J["spec/*.json<br/>the format's single source of truth"]
-    G["generator/<br/>emitters"]
-    B["generated_source/IFE_Blocks.hpp/.cpp<br/>one typed handle per block"]
+    G["generate_IFE.py → generator/<br/>emitters"]
+    B["generated_source/IFE_Blocks.hpp/.cpp<br/>one typed handle per block,<br/>in the build tree"]
     V["generated_source/IFE_Validation.cpp<br/>validate() / validate_deep()"]
     M["generated_source/IFE_Map.hpp<br/>wire tag &lt;-&gt; MapEntryType,<br/>reference_fields_view"]
     P["include/IFE_Primitives.hpp<br/>the 5 primitive shapes + reader policy"]

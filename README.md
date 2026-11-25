@@ -23,7 +23,9 @@ and has an equivalent Bazel build (`BUILD.bazel`); both are exercised in CI.
 # Installation
 Incorporating the Iris File Extension into your code base is simple; Additional [Iris headers](https://github.com/Aptix-Bio/Iris-Headers) are required but are automatically included when this repository is built or included in a CMake project.
 
-No release has been tagged yet, so build from source for now. Once one is, pre-compiled binaries will be published under the **releases tab** for Linux (x86-64 and arm64), macOS (universal) and Windows (x64): each archive carries the shared and static libraries, the public headers, and the CMake package configuration that `find_package(IrisFileExtension)` resolves, pinned by SHA-256 in the release's `SHA256SUMS`, with the specification as PDF and HTML. Python and JavaScript access to slides is provided today by the [Iris Slide Community Module](https://github.com/Aptix-Bio/Iris-Slide.git), which consumes this repository for slide file serialization.
+No release has been tagged yet, so build from source for now. Once one is, pre-compiled binaries will be published under the **releases tab** for Linux (x86-64 and arm64), macOS (universal) and Windows (x64): each archive carries the shared and static libraries, the public headers, and the CMake package configuration that `find_package(IrisFileExtension)` resolves, pinned by SHA-256 in the release's `SHA256SUMS`, with the specification as PDF and HTML and the generated C++ layer as `IrisFileExtension-<version>-generated-source.tar.gz`. Python and JavaScript access to slides is provided today by the [Iris Slide Community Module](https://github.com/Aptix-Bio/Iris-Slide.git), which consumes this repository for slide file serialization.
+
+The C++ block layer is generated from `spec/*.json` by `generate_IFE.py`, which a CMake configure runs into the build directory (`<build>/generated_source/`); it needs only Python 3's standard library. Nothing generated is committed: run `python3 generate_IFE.py --help` for the flags, or take the generated layer from a release.
 
 ### Non-CMake Project
 If you are **NOT** using CMake to build your project, you should still use CMake to generate the Iris File Extension library.
@@ -41,8 +43,8 @@ cmake --install ./Iris-File-Extension/build
 An equivalent Bazel build covers the library, the examples and the full test
 suite (`BUILD.bazel`). The test rules live in `tests/tests.bzl`, declared from
 the `ife_tests()` macro that `BUILD.bazel` calls — the fixture genrules, the
-header-only input library and every `cc_test` target. `generated_source/`
-is regenerated at build time from `spec/` (never committed), and Iris-Headers
+header-only input library and every `cc_test` target. A genrule runs
+`generate_IFE.py` at build time into Bazel's output tree, and Iris-Headers
 is resolved from the sibling checkout next to this repository (see
 `MODULE.bazel`).
 
@@ -54,15 +56,15 @@ bazel test //... --test_output=errors
 ```
 
 #### Xcode
-On macOS, generate a native Xcode project (tests enabled, `generated_source/`
-regenerated at configure) and open it directly:
+On macOS, generate a native Xcode project (tests enabled, the generated layer
+written into `build-xcode/generated_source/` at configure) and open it directly:
 
 ```shell
 cmake --preset xcode
 open build-xcode/IrisFileExtension.xcodeproj
 ```
 
-Headers from `src/` and `generated_source/` are part of the project navigator.
+Headers from `src/`, `include/` and the generated layer are part of the project navigator.
 Of the schemes CMake generates, the `ife_*` test schemes are the ones to
 use (`ALL_BUILD`, `RUN_TESTS`, `ZERO_CHECK` and `install` are CMake plumbing).
 
