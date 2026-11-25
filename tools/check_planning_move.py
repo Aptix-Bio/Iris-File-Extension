@@ -43,6 +43,21 @@ wbs = new_lines[repo / "development" / "WBS.md"]
 everything = "\n".join(line for lines in new_lines.values() for line in lines)
 wbs_text = "\n".join(wbs)
 
+def box_problem(where: str, state: str, text: str) -> str | None:
+    """Where a box of the old files should be now, or None when it is there: an open box in
+    WBS.md, a ticked box in any development/ file."""
+    for before, after in PATHS:
+        text = text.replace(before, after)
+    text = norm(text)
+    if state == " ":
+        if any(text in candidate for candidate in wbs):
+            return None
+        return f"open box {where} is not in WBS.md: {text[:90]!r}"
+    if any(text in candidate for lines in new_lines.values() for candidate in lines):
+        return None
+    return f"ticked box {where} is in no development/ file: {text[:90]!r}"
+
+
 problems: list[str] = []
 ids: set[str] = set()
 open_ids: set[str] = set(OPEN_PACKAGES)
@@ -56,16 +71,11 @@ for name in OLD:
             continue
         state = box["state"].lower()
         boxes[state] += 1
-        text = box["text"]
-        for before, after in PATHS:
-            text = text.replace(before, after)
-        text = norm(text)
         if state == " ":
             open_ids |= found
-            if not any(text in candidate for candidate in wbs):
-                problems.append(f"open box {name}:{number} is not in WBS.md: {text[:90]!r}")
-        elif not any(text in candidate for lines in new_lines.values() for candidate in lines):
-            problems.append(f"ticked box {name}:{number} is in no development/ file: {text[:90]!r}")
+        problem = box_problem(f"{name}:{number}", state, box["text"])
+        if problem is not None:
+            problems.append(problem)
 
 for item in sorted(ids):
     if not re.search(rf"(?<![\w.-]){re.escape(item)}(?![\w-]|\.\d)", everything):

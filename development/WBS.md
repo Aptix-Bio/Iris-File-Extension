@@ -99,6 +99,7 @@ Branch `feature/ReviewBot_CI-3`, pull request #6.
   - [x] CI-3.6.2 **References and rubric.** `grep` finds the retired files named only in provenance notes and the dated records; the rubric sends 15 reference files (211,205 characters, from 446,068 with MIGRATION.md), and `[trace]` names WBS.md ticks and RTM.md rows; `cmake -P cmake/check_review_configuration.cmake` exits 0, and its new `[trace]` file check exits 1 on the base rubric with MIGRATION.md deleted, which the base check passed. [47cd97c](https://github.com/Aptix-Bio/Iris-File-Extension/commit/47cd97c65c26e897e5ead97af2a6616e77cea05e)
   - [x] CI-3.6.3 **The pinned bot loads it.** `load_rubric` at the pinned governance commit: 13 items, `[trace]` on WBS.md and RTM.md, all 15 reference files present; the 14 Mermaid diagrams of `development/` render (mermaid-cli). [47cd97c](https://github.com/Aptix-Bio/Iris-File-Extension/commit/47cd97c65c26e897e5ead97af2a6616e77cea05e)
   - [ ] CI-3.6.4 **VERIFY:** the maintainer reviews `development/`.
+- [ ] CI-3.7 **Nesting at most three levels.** `cmake/check_review_configuration.cmake` (five levels at the governance checkout's checks, four in the per-line checks and the CODEOWNERS check) and `tools/check_planning_move.py` (four at the open-box check) move their inner loops into helper functions, as development/style_guide.md, Control flow, requires. The check now counts problems in a global property, so a helper at any depth reports one.
 
 ## CI-1 — Every CI job runs on a pinned Blacksmith runner `done`; VERIFY owed
 
