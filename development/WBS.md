@@ -76,7 +76,7 @@ touch different files from the recovery lane and can run beside it.
 | R-3 | release 1.1 | `blocked` on the maintainer's review of the revision (R-3.1) |
 | R-4, R-5 | Python and JavaScript/WebAssembly bindings | `todo`, after R-3 (D15) |
 | R-6 | an expectations header for the 1.1 witness | `doing`: the test exists, its record is owed |
-| R-7 | `generate_IFE.py` is the generator's one entry point; the generated layer is built out of the source tree and published with each release | `doing` (pull request #6) |
+| R-7 | `generate_IFE.py` is the generator's one entry point; the generated layer is built out of the source tree and published with each release | `doing` (pull request #10, stacked on #9) |
 | ZC-1 to ZC-5 | the read path as a const lens (D14) | `todo` |
 | BL-1 to BL-7 | carried forward, none gating the release | `todo` |
 
@@ -461,7 +461,7 @@ and two build directories of one checkout no longer overwrite each other's
 copy. `release.yml` archives the same output as
 `IrisFileExtension-<version>-generated-source.tar.gz`, so a consumer without
 Python takes the generated layer from the release. Branch
-`feature/ReviewBot_CI-3`, pull request #6. [Spec_01, Release_04]
+`feature/GeneratedOutOfSource_R-7`, pull request #10. [Spec_01, Release_04]
 
 - [x] R-7.1 **Red first.** `tests/generator/test_out_of_source.py` (ctest `ife_generated_out_of_source`) requires the build to compile the layer from outside the source tree and the source tree to hold no `generated_source/` or `generated_docs/`: it failed three ways against the old layout ("the build compiles the generated layer from the source tree", and both directories present). `tests/generator/test_directory_flag.py` runs `generate_IFE.py` by path from another directory with PYTHONPATH unset and failed with "can't open file .../generate_IFE.py". [26954ee](https://github.com/Aptix-Bio/Iris-File-Extension/commit/26954ee3fb3ae65e18491561db54e298941ddc3e)
 - [x] R-7.2 **Green.** `generate_IFE.py` added and every caller switched to it (`generator/__main__.py` became `generator/cli.py`, so there is one way to run it); CMake generates into `${CMAKE_CURRENT_BINARY_DIR}` at every configure with the spec, the witness and the generator as configure dependencies, and `IFE_RUN_GENERATOR` is removed; the three test fixtures and the corpus manifest header move to the binary directory too; `release.yml`'s `generated` job archives the C++ layer for `publish`. From a clean build directory, ctest 27 of 27 (Release, examples on); touching `spec/ife_fields.json` reconfigures and regenerates on `cmake --build`; `--validate`, `--check`, determinism under two seeds, `test_directory_flag.py`, `test_deprecated.py`, both lints, the review-configuration check and `spec/build_document.sh` pass; the install tree carries the generated headers and `tools/package_smoke` links and runs against it; a FetchContent consumer compiles `IFE_Blocks.hpp` from `_deps/.../generated_source/`; Bazel's generator genrules (`:generated_sources`, `:future_generated`) build in the sandbox; its C++ targets did not compile on the development Mac, where rules_cc's own `runfiles.cc` fails the same absolute-path inclusion check on the Xcode SDK, so `bazel test` is left to CI. After all of it the source tree holds no generated file and `git status` shows only the change. [39dc5da](https://github.com/Aptix-Bio/Iris-File-Extension/commit/39dc5da723fb6b1074dbe7b6edb989df1eddd803)
