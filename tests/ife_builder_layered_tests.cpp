@@ -7,7 +7,10 @@
  * What this pins:
  *   - Round trip: every tile's bytes, the extent, one associated image (its
  *     orientation included), and the metadata come back through
- *     `abstract_file_structure` unchanged, and the file validates.
+ *     `abstract_file_structure` unchanged, and the file validates. The
+ *     attributes declare METADATA_I2S at I2S 0.1, packed into VERSION as
+ *     `major << 8 | minor` (0x0001, decided 2026-11-25), and read back as
+ *     that major and minor.
  *   - Frames: every framed stream carries a frame at the offset its tile
  *     entry names (the ANCHOR — CLAUDE.md), naming the right global tile index;
  *     recovery finds every reference intact.
@@ -104,11 +107,17 @@ std::vector<BYTE> stream_for(uint32_t global) {
     return s;
 }
 
+/// The I2S version the attributes conform to, and its ATTRIBUTES.VERSION
+/// packing, `major << 8 | minor` (spec/ife_fields.json, decided 2026-11-25).
+constexpr uint16_t I2S_MAJOR = 0;
+constexpr uint16_t I2S_MINOR = 1;
+constexpr uint16_t I2S_VERSION = static_cast<uint16_t>((I2S_MAJOR << 8) | I2S_MINOR);
+
 Metadata some_metadata() {
     Metadata metadata;
     metadata.codec = {2025, 3, 2};
     metadata.attributes.type    = METADATA_I2S;
-    metadata.attributes.version = 1;
+    metadata.attributes.version = I2S_VERSION;
     metadata.attributes["b.key"] = u8"two";
     metadata.attributes["a.key"] = u8"one";
     metadata.ICC_profile.assign(100, '\0');
@@ -282,6 +291,10 @@ int main() {
         IFE_CHECK(file.metadata.codec.major == 2025 && file.metadata.codec.minor == 3 &&
                   file.metadata.codec.build == 2);
         IFE_CHECK(file.metadata.attributes.size() == 2);
+        IFE_CHECK(file.metadata.attributes.type == METADATA_I2S);
+        IFE_CHECK(file.metadata.attributes.version == I2S_VERSION);
+        IFE_CHECK((file.metadata.attributes.version >> 8) == I2S_MAJOR);
+        IFE_CHECK((file.metadata.attributes.version & 0xFF) == I2S_MINOR);
         IFE_CHECK(file.metadata.attributes.at("a.key") == u8"one");
         IFE_CHECK(file.metadata.attributes.at("b.key") == u8"two");
         IFE_CHECK(file.metadata.ICC_profile == meta.ICC_profile);
