@@ -16,7 +16,10 @@
 #     fork's pull request gets a job that states why it is skipped;
 #   - GOVERNANCE_READ_TOKEN reaches only the step that checks out Aptix-Bio/governance at the
 #     pinned commit, and every other action is pinned by a full commit SHA;
-#   - pull request text reaches a `run:` script only through `env:`, and every job is bounded.
+#   - pull request text reaches a `run:` script only through `env:`, and every job is bounded;
+#   - every `run:` step is one command, `cmake [-D<name>=<value>]... -P base/cmake/<name>.cmake`,
+#     its logic in the script (development/ci_runners.md, "Workflows are simple; CMake does the
+#     work"), so no shell line in the workflow can reach the model key or the write token.
 # GitHub, "Securely using pull_request_target" and "Secure use reference" (docs.github.com,
 # read 2026-11-24) give the reasons; development/WBS.md, CI-3, the sources. The `spec` job in
 # .github/workflows/ci.yml runs it on every pull request.
@@ -212,7 +215,8 @@ function(check_step_action step first)
 endfunction()
 
 # Line by line: the head only as HEAD_SHA, the governance token only in its checkout or its
-# presence check, and no expression inside a run: script.
+# presence check, no expression inside a run: script, and each run: one `cmake -P` of a script in
+# the base checkout.
 function(check_step_lines step first)
     string(REPLACE "\n" ";" lines "${step}")
     set(run_indent -1)
@@ -241,6 +245,9 @@ function(check_step_lines step first)
         endif()
         if(in_run AND NOT expression EQUAL -1)
             problem("step '${first}': an expression inside a run: script; pass it through env:")
+        endif()
+        if(stripped MATCHES "^(- )?run: " AND NOT stripped MATCHES "^(- )?run: cmake( -D[^ ]+)* -P base/cmake/[a-z_]+\\.cmake$")
+            problem("step '${first}': '${stripped}' is not one `cmake -P base/cmake/<name>.cmake` command")
         endif()
         if(stripped MATCHES "^(- )?run: [|>]")
             set(run_indent ${indent})
