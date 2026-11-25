@@ -218,15 +218,12 @@ jobs:
     env:
       PKG: IrisFileExtension-${{ needs.verify.outputs.version }}-generated-source
     steps:
-      - uses: actions/checkout@v7
-      - name: Generate
-        run: python3 generate_IFE.py --out-dir "$PWD/stage/$PKG/generated_source"
-      - name: Add the licence
-        run: cp LICENSE "stage/$PKG/"
-      - name: Archive
-        working-directory: stage
-        run: tar -czf "$PKG.tar.gz" "$PKG"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Generates into stage/$PKG/generated_source, adds LICENSE, writes stage/$PKG.tar.gz.
+      - run: cmake -P cmake/generated_archive.cmake
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ env.PKG }}
           path: stage/${{ env.PKG }}.tar.gz
