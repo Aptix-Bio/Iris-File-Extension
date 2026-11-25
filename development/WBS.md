@@ -51,6 +51,9 @@ flowchart LR
     R4 --> R5["R-5 JS/WASM bindings"]
     R3 --> RC5["RC-5 checksum footer<br/>1.2 material"]
     R7["R-7 generated layer out of<br/>the source tree, released<br/>doing"] --> R3
+    R8["R-8 the read API returns<br/>Result, nothing thrown<br/>doing"] --> R3
+    R8 --> R9["R-9 the Builder's API<br/>returns Result"]
+    R9 --> R4
     TE1["TE-1 tile encoding 3 is AV1<br/>doing"] --> OD["OD-T1 key plane,<br/>decode order to depth"]
     IV1["IV-1 I2S version<br/>packed in VERSION"]
     TE2["TE-2 tile encodings 4, 5:<br/>UASTC, XUASTC<br/>doing"] --> OD2["OD-T3 XUASTC footprint<br/>OD-T4 XUASTC mip levels"]
@@ -77,6 +80,8 @@ touch different files from the recovery lane and can run beside it.
 | R-4, R-5 | Python and JavaScript/WebAssembly bindings | `todo`, after R-3 (D15) |
 | R-6 | an expectations header for the 1.1 witness | `doing`: the test exists, its record is owed |
 | R-7 | `generate_IFE.py` is the generator's one entry point; the generated layer is built out of the source tree and published with each release | `doing` (pull request #10, stacked on #9) |
+| R-8 | no exception crosses the public read API: every read entry point is `noexcept`, returns a `Result` and writes its value through an output reference | `doing` (pull request #11, stacked on #10; Iris-Slide's call sites on its paired branch) |
+| R-9 | the Builder's public API returns a `Result` in the same form | `todo`, before R-4 |
 | ZC-1 to ZC-5 | the read path as a const lens (D14) | `todo` |
 | BL-1 to BL-7 | carried forward, none gating the release | `todo` |
 
@@ -468,6 +473,52 @@ Python takes the generated layer from the release. Branch
 - [ ] R-7.3 **VERIFY:** the first `release.yml` run by `workflow_dispatch`
       uploads the generated-source archive beside the packages.
 - [x] R-7.4 **The `generated` job follows the pipeline rules.** Its one `run:` step is `cmake -P cmake/generated_archive.cmake`, which runs `generate_IFE.py`, adds LICENSE, writes the archive with `cmake -E tar` and fails when it is missing or empty; its checkout and upload are pinned by full commit SHA, the checkout with `persist-credentials: false` (development/ci_runners.md; the rubric's Pipeline item, which judges a job a diff adds in full). Evidence: a local run writes a 39,718-byte archive of `generated_source/` and LICENSE, a malformed PKG exits 1 naming it, actionlint adds no finding. [1d54487](https://github.com/Aptix-Bio/Iris-File-Extension/commit/1d54487014dd524013bde7614058ed58b18cdea2)
+
+## R-8 — No exception crosses the public read API `doing`
+
+development/style_guide.md, Errors: a function a consumer calls is `noexcept`
+and returns an `Iris::Result`, and since 2026-11-25 a boundary that produces a
+value writes it through an output reference and still returns the `Result`
+(no value-carrying result type). Until this package the read path threw
+`std::runtime_error` and `std::out_of_range` across it: `abstract_file_structure`
+(free and on the Parser), `Parser::abstraction`, `tile`, `tile_planes`,
+`image`, `Parser::open`, `generate_file_map` and the public `Recovery` calls,
+so a consumer had to wrap each in its own `try` and lost IFE's `FileError`
+code on the way. Inside the module the read path still throws; each public
+function catches by type at its boundary and returns the failure under
+`Domain::IRIS_FILE_EXTENSION` with its code, the offending value and the
+location of the throw. Branch `feature/BoundaryResults_R-8`, pull request #11;
+Iris-Slide's call sites move on its branch of the same name, so the
+`downstream` job pairs them. [Read_06]
+
+- [ ] R-8.1 **Red first.** `tests/ife_boundary_results_tests.cpp` (ctest
+      `ife_boundary_results_tests`) calls every converted function in its new
+      form, holds each to `noexcept` with a `static_assert`, and requires a
+      damaged block, a TILE_TABLE.MIP_LEVELS the tile cannot hold, a missing
+      tile, a missing label, an unmappable path and a short file each to
+      return a failure `Result` naming the offending value.
+- [ ] R-8.2 **Green.** The read entry points converted, the callers in
+      `tests/`, `examples/` and the README moved to them, and the `downstream`
+      job building Iris-Slide's paired branch against this checkout.
+
+## R-9 — The Builder's public API returns a `Result` `todo`
+
+The rule R-8 applies to the read path holds for the write handle too
+(development/style_guide.md, Errors): `Builder::create`, `set_tile_table`,
+`append_tile`, `append_null_tile`, `append_image`, `append_clinical`,
+`tile_offsets`, `finalize` and the `Builder_t` block tier throw
+`std::logic_error`, `std::invalid_argument`, `std::out_of_range`,
+`std::runtime_error` and `std::system_error` across it (43 `throw` sites in
+`src/IFE_Builder.cpp`), and `Parser`'s borrowing constructor can throw
+`std::bad_alloc`. Each becomes `noexcept`, returning a `Result` and writing
+what it produces (an offset, a handle, the placements) through an output
+reference, and Iris-Slide's encoder moves with it on a paired branch. Before
+R-4, so the bindings translate one error mechanism. [Write_05]
+
+- [ ] R-9.1 **Red first.** A test that each Builder entry point is `noexcept`
+      and that a call out of order, a retired encoding and an exhausted arena
+      return a failure `Result` naming the value.
+- [ ] R-9.2 **Green.**
 
 ## ZC — The read path as a const lens `todo`
 
