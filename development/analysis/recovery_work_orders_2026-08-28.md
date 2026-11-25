@@ -628,9 +628,9 @@ search, not of the evidence** — and IFE's ranker had the identical semantics.
 
 REC-23.1 brackets a candidate between the nearest intact same-slot references
 **in parent order** (FastFHIR measured 1471/1472 monotonic). **Measured false
-for IFE.** Iris-Codec claims a tile's arena space with
+for IFE.** Iris-Codec (now Iris-Slide) claims a tile's arena space with
 `offset.fetch_add(entry.size)` *after* compression returns
-(Iris-Codec's `src/IrisCodecEncoder.cpp:751`), on `hardware_concurrency()`
+(Iris-Codec's, now Iris-Slide's, `src/IrisCodecEncoder.cpp:751`), on `hardware_concurrency()`
 workers CAS-claiming one shared grid, so a stream's offset records **completion
 order, not tile order**:
 
@@ -759,7 +759,7 @@ where, and what evidence already exists — nothing here needs re-deriving.
       **The consequence to know about:** a structurally damaged file is now
       REFUSED by `abstract_file_structure()` instead of opened — 58–65% of
       one-bit trials throw. That is the honest answer, and `Recovery` +
-      `apply()` is how to reopen one. Iris-Codec opens slides through this
+      `apply()` is how to reopen one. Iris-Codec (now Iris-Slide) opens slides through this
       call without validating first (`IrisCodecSlide.cpp:216`), so it
       inherits the refusal — RC-10.8.
 

@@ -162,7 +162,7 @@ never the fetch** — the oracle and the >4 GiB test depend on the snapshot.
 > else keys off it, and `CIPHER_OFFSET` is NULL for both JPEG and AVIF. A
 > `corpus_AVIF` would be structurally identical to `corpus_JPEG` but for one
 > enum byte, in a repository whose scope excludes compression. Real AVIF bytes
-> are Iris-Codec's evidence, not this layer's.
+> are Iris-Codec's (now Iris-Slide's) evidence, not this layer's.
 >
 > **CIPHER (was R-2.2 ⚠) — resolved by isolation.** The encoding rule is
 > normative prose only; nothing in the validator enforces it. And the block is
@@ -493,7 +493,7 @@ is the binding, not the transport.
 **Scope, first, because the obvious reading is wrong.** This is *not* "read
 everything". Tile pixel streams are out of scope permanently: IFE references
 them in their on-disk compressed form and never interprets a byte, because
-compression is Iris-Codec's layer. The witness writer fills them with `0xCD`
+compression is Iris-Codec's (now Iris-Slide's) layer. The witness writer fills them with `0xCD`
 and nothing should ever look.
 
 What *is* in scope is the structural field values, and the precedent is already

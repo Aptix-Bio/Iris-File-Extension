@@ -183,7 +183,7 @@ includes the ASan build (`cmake --build --preset asan && ctest --preset asan`).
   - **Density and one parent hold on every writer measured.** Read, not run:
     the pre-Builder encoder is dense too. It bump-claims from the header's end,
     and `RESERVE_METADATA` claims exactly the METADATA block written into it
-    later. No Iris-Codec path edits a file in place (`FILE_REVISION` is passed
+    later. No Iris-Codec (now Iris-Slide) path edits a file in place (`FILE_REVISION` is passed
     through, never incremented), so OD-R4 has no writer today.
   - **Order is not a witness** (57 % ascending at 8 threads), as measured
     2026-09-09; the single-threaded corpus reads 100 % and would mislead.

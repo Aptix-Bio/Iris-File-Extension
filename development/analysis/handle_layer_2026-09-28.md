@@ -43,7 +43,7 @@ never committed; what must outlive it is here.
   Builder's API (decided 2026-09-30). The
   first `finalize` wrote the whole structure in its own order and sorted the
   attributes, which put METADATA after the mutable attribute blocks and image
-  bytes ahead of the tile table; Iris-Codec could not reproduce the layout it
+  bytes ahead of the tile table; Iris-Codec (now Iris-Slide) could not reproduce the layout it
   has always written (fixed-size blocks ahead of ones an edit replaces:
   tiles → tile table → METADATA → ICC → images → attributes). `finalize` now
   only seals (`BuilderFinalizeInfo{tileTable, metadata, revision}`); the caller
@@ -69,7 +69,7 @@ arenas (Iris-Headers). Tests: `ife_builder_tests`, `ife_builder_layered_tests`,
 `ife_parser_tests`, `ife_blocks_tests`, and `ife_readme_compiles` (the README's
 examples, compiled as published).
 
-Consumed 2026-09-30 (Iris-Codec 8a0f93f, landed with this repository's 4abcf16):
+Consumed 2026-09-30 (Iris-Codec, now Iris-Slide, 8a0f93f, landed with this repository's 4abcf16):
 the Encoder writes through a Builder — `append_tile` / `append_null_tile` from
 its pool, then composes its own layout from `tile_offsets()` / `image_entries()`
 (tile table, METADATA claimed early and filled last, ICC, images, attributes)
