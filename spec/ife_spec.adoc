@@ -454,6 +454,13 @@ include::{generated}/constants/metadata_formats.adoc[]
   Interoperability Specification version for METADATA_I2S, the encoding year
   for METADATA_DICOM — and *shall* encode zero (0x0000) where that standard
   has no version.
+* Under METADATA_I2S, VERSION *shall* encode the Iris Interoperability
+  Specification version the pairs conform to, packed with the major version in
+  the high byte and the minor version in the low byte,
+  `+major << 8 | minor+`: I2S 0.1 is 0x0001 and I2S 1.0 is 0x0100. A reader
+  *shall* unpack the major version as `+VERSION >> 8+` and the minor version
+  as `+VERSION & 0xFF+`. Zero under METADATA_I2S is an unversioned claim, read
+  as free text (below).
 
 NOTE: IFE 1.0 gave METADATA_FREE_TEXT the same value as METADATA_I2S, so a
 file written under 1.0 encodes 1 for either. Read VERSION to tell them apart:

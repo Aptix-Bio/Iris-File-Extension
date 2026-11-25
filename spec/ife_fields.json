@@ -381,7 +381,7 @@
             {
               "name": "VERSION",
               "type": "u16",
-              "description": "Version of the standard named by FORMAT, whose meaning that standard defines: the Iris Interoperability Specification version for METADATA_I2S, the encoding year for METADATA_DICOM. Zero where the format has no version."
+              "description": "Version of the standard named by FORMAT. Under METADATA_I2S it shall be the Iris Interoperability Specification version the pairs conform to, packed as major << 8 | minor (I2S 0.1 is 0x0001, I2S 1.0 is 0x0100), and a reader unpacks the major version as VERSION >> 8 and the minor as VERSION & 0xFF. Under METADATA_DICOM it is the encoding year. Zero where the format has no version; under METADATA_I2S zero is an unversioned claim, which is free text."
             },
             {
               "name": "SIZES_OFFSET",
