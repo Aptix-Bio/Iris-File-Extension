@@ -508,6 +508,16 @@ if(IFE_BUILD_TESTS)
                 ${PROJECT_SOURCE_DIR}/tests/generator/test_deprecated.py
     )
 
+    # ATTRIBUTES.VERSION under METADATA_I2S is the I2S version packed as
+    # `major << 8 | minor` (decided 2026-11-25): the schema and the narrative
+    # state it as a "shall", the emitted tables carry it, and it moves no wire
+    # fact, so a writer and a reader cannot pack the two halves differently.
+    add_test(
+        NAME ife_generator_attributes_version
+        COMMAND ${Python3_EXECUTABLE}
+                ${PROJECT_SOURCE_DIR}/tests/generator/test_attributes_version.py
+    )
+
     # The README's C++ examples, compiled as published (syntax-only) against the
     # real headers. They once drifted from the API while every test stayed
     # green; each ```cpp block carries an <!-- ife-compile: ... --> annotation

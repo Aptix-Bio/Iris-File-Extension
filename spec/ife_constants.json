@@ -219,7 +219,7 @@
         },
         "METADATA_I2S": {
           "value": 1,
-          "description": "Conforms to the Iris Interoperability Specification: keys are DICOM keywords, and every pair is a fact fixed when the slide was scanned that identifies no individual. Clinical and identifying facts are carried by the clinical metadata stream instead. I2S covers the acquisition attributes of DICOM only, deliberately and incompletely, and may diverge from DICOM as it develops."
+          "description": "Conforms to the Iris Interoperability Specification: keys are DICOM keywords, and every pair is a fact fixed when the slide was scanned that identifies no individual. Clinical and identifying facts are carried by the clinical metadata stream instead. I2S covers the acquisition attributes of DICOM only, deliberately and incompletely, and may diverge from DICOM as it develops. ATTRIBUTES.VERSION carries the I2S version conformed to, packed as major << 8 | minor."
         },
         "METADATA_DICOM": {
           "value": 2,

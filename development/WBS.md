@@ -51,6 +51,7 @@ flowchart LR
     R4 --> R5["R-5 JS/WASM bindings"]
     R3 --> RC5["RC-5 checksum footer<br/>1.2 material"]
     TE1["TE-1 tile encoding 3 is AV1<br/>doing"] --> OD["OD-T1 key plane,<br/>decode order to depth"]
+    IV1["IV-1 I2S version<br/>packed in VERSION"]
     VL1["VL-1 parallel diagnostic log"]
     ZC["ZC-1..5 span read path"]
     BL["BL-1..7 backlog"]
@@ -64,6 +65,7 @@ touch different files from the recovery lane and can run beside it.
 |---|---|---|
 | CI-3 | the review bot reviews every pull request; the plan moves to `development/` | `doing` (pull request #6) |
 | TE-1 | tile encoding value 3 is `TILE_ENCODING_AV1`, a bare AV1 sequence, in place of AVIF | `doing` (pull request #7, stacked on #6); TE-1.4 `blocked` on OD-T1 |
+| IV-1 | `ATTRIBUTES.VERSION` under `METADATA_I2S` is the I2S version packed as `major << 8 \| minor` (D27) | `doing` (pull request #8, stacked on #7) |
 | CI-1 | every CI job on a pinned Blacksmith runner | `done`; VERIFY and the macOS gating owed |
 | VL-1 | the validation layer's diagnostic sink is safe under a multithreaded writer | `todo` (P1, latent) |
 | RB-4 to RB-9 | the recovery census grows its solver, tile streams, report, apply and calibration | `todo`; RB-5 to RB-7 wait on OD-R1, OD-R3, OD-R4, OD-R5 defaults |
@@ -165,6 +167,21 @@ Byte-Streams. [Wire_06, Wire_07]
 - [ ] TE-1.3 **VERIFY:** the maintainer reviews the AV1 clause of the specification.
 - [x] TE-1.5 **The exception is recorded.** Value 3 is a member of the ratified 1.0 group, so its reassignment breaks append-only; the code owner sanctions it (2026-11-25) because IFE has no deployed corpus. `tests/wire/README.md`, D26, the 1.1 revision summary and CONTRIBUTING.md's absolutes record it; `tools/refresh_witness.py` has no path that records a break, so the witness key stays renamed by hand. Evidence: `--validate` and `--check` pass and `tools/refresh_witness.py` reports the witness unchanged; ctest 25 of 25 (Release, AppleClang). [7afa979](https://github.com/Aptix-Bio/Iris-File-Extension/commit/7afa9797cb1a3dc3301ab73681a193806218de4c)
 - [ ] TE-1.4 **Which plane is the key (in-focus) frame, and the mapping of decode order to focal depth.** `blocked` on OD-T1 (ARCHITECTURE.md §1.1). No key-plane field and no frame-to-depth ordering rule is added until it is decided; the specification marks both open.
+
+## IV-1 — `ATTRIBUTES.VERSION` under `METADATA_I2S` is the I2S version, packed `doing`
+
+Decided 2026-11-25 (D27): the u16 `ATTRIBUTES.VERSION` of a block declaring
+`METADATA_I2S` holds the Iris Interoperability Specification version as
+`major << 8 | minor` (I2S 0.1 is 0x0001, I2S 1.0 is 0x0100); zero is
+unversioned, which a reader already takes as free text (D17). The rule is
+prose about a value, not a wire fact, so `tests/wire/witness.json` is
+unchanged. Specification: `spec/ife_fields.json` (VERSION),
+`spec/ife_constants.json` (`METADATA_I2S`) and the ife-attributes clause of
+`spec/ife_spec.adoc`. [Wire_08]
+
+- [x] IV-1.1 **Red first.** `tests/generator/test_attributes_version.py` (ctest `ife_generator_attributes_version`) requires the packing as a "shall" in the schema and the narrative, with the unpacking and both examples, in the emitted tables, and off the wire: 25 of 26, the new test failing with 14 FAIL lines. `ife_builder_layered_tests` round-trips `METADATA_I2S` at VERSION 0x0001 and reads back both halves; it records behaviour the Builder already had and was green. [d9acd91](https://github.com/Aptix-Bio/Iris-File-Extension/commit/d9acd91b5ab6b727728521cf24500ba05fd4661d)
+- [x] IV-1.2 **Green.** The VERSION and `METADATA_I2S` descriptions, the 1.1 revision summary and the ife-attributes clause state the rule; ctest 26 of 26 (Release); `--validate`, `--check` (no drift, witness not stale, so no refresh), both lints and `spec/build_document.sh` pass, and the rendered clause shows `major << 8 | minor`. [86ffcea](https://github.com/Aptix-Bio/Iris-File-Extension/commit/86ffceaa8f466e5dffe168629baedf4df3506ccb)
+- [ ] IV-1.3 **VERIFY:** the maintainer reviews the ife-attributes clause.
 
 ## VL-1 — The validation layer's diagnostic sink under a multithreaded writer `todo` (P1, latent)
 
