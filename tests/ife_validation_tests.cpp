@@ -151,10 +151,13 @@ void test_attached_enforces_enum_membership() {
     table.ENCODING = k::TileEncodings::TILE_ENCODING_JPEG;
     IFE_CHECK(static_cast<bool>(b::store(f.data(), 0, table, &hooks)));
 
-    // Every declared member passes — AV1 in particular: no committed bytes
-    // carry it (the snapshot is JPEG), so the conformance layer must accept
-    // it on the specification's word, and the reserved IRIS value too.
+    // Every declared member passes — AV1, UASTC and XUASTC in particular: no
+    // committed bytes carry them (the snapshot is JPEG), so the conformance
+    // layer must accept them on the specification's word, and the reserved
+    // IRIS value too.
     for (auto encoding : {k::TileEncodings::TILE_ENCODING_AV1,
+                          k::TileEncodings::TILE_ENCODING_UASTC,
+                          k::TileEncodings::TILE_ENCODING_XUASTC,
                           k::TileEncodings::TILE_ENCODING_IRIS}) {
         g_diagnostic.clear();
         table.ENCODING = encoding;

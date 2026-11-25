@@ -1231,22 +1231,27 @@ void test_packed_fields_refuse_values_too_wide() {
 
 // The tile encoding is opaque data to this layer — the codec is Iris-Slide's
 // business — so every declared value must store and read back identically.
-// The snapshot and every fixture write JPEG; TILE_ENCODING_AV1 never appears
-// in committed bytes, and a reader that mishandled it would pass every other
-// test. Regression: the generated store/read path for a non-JPEG value.
-void test_tile_encoding_av1_round_trips() {
-    // header_size, not header_size_v1_0: the handle's __size is the buffer
-    // length, and fits() requires the newest header (46 B with TILE_LENGTH).
-    std::vector<BYTE> f(b::TILE_TABLE::header_size, 0);
-    BYTE* p = f.data();
-    const b::TileTableCreateInfo info{
-        .ENCODING = k::TileEncodings::TILE_ENCODING_AV1,
-        .FORMAT = k::PixelFormats::FORMAT_R8G8B8A8,
-    };
-    IFE_CHECK(static_cast<bool>(b::store(p, 0, info)));
-    const b::TILE_TABLE tt{p, 0, f.size(), VERSION_1_0};
-    IFE_CHECK(static_cast<bool>(tt.validate()));
-    IFE_CHECK(tt.encoding() == k::TileEncodings::TILE_ENCODING_AV1);
+// The snapshot and every fixture write JPEG; TILE_ENCODING_AV1,
+// TILE_ENCODING_UASTC and TILE_ENCODING_XUASTC never appear in committed
+// bytes, and a reader that mishandled one would pass every other test.
+// Regression: the generated store/read path for each non-JPEG value.
+void test_non_jpeg_tile_encodings_round_trip() {
+    for (const auto encoding : {k::TileEncodings::TILE_ENCODING_AV1,
+                                k::TileEncodings::TILE_ENCODING_UASTC,
+                                k::TileEncodings::TILE_ENCODING_XUASTC}) {
+        // header_size, not header_size_v1_0: the handle's __size is the buffer
+        // length, and fits() requires the newest header (46 B with TILE_LENGTH).
+        std::vector<BYTE> f(b::TILE_TABLE::header_size, 0);
+        BYTE* p = f.data();
+        const b::TileTableCreateInfo info{
+            .ENCODING = encoding,
+            .FORMAT = k::PixelFormats::FORMAT_R8G8B8A8,
+        };
+        IFE_CHECK(static_cast<bool>(b::store(p, 0, info)));
+        const b::TILE_TABLE tt{p, 0, f.size(), VERSION_1_0};
+        IFE_CHECK(static_cast<bool>(tt.validate()));
+        IFE_CHECK(tt.encoding() == encoding);
+    }
 }
 
 }  // namespace
@@ -1265,7 +1270,7 @@ int main() {
     test_annotation_groups_read_from_entries();
     test_generated_writers_round_trip();
     test_no_arg_validate_deep_on_every_block();
-    test_tile_encoding_av1_round_trips();
+    test_non_jpeg_tile_encodings_round_trip();
     test_packed_fields_refuse_values_too_wide();
     test_writers_stay_within_size_of();
     test_nested_attribute_values_round_trip();
