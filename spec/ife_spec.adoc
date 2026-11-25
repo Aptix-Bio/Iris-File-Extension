@@ -535,7 +535,9 @@ byte-stream per tile, not as several, and the tile's OFFSET and SIZE
   is the only place the format records it: this specification never
   interprets a byte-stream, so it cannot defer the count to one. How a
   stream codes its planes is the tile encoding's; for TILE_ENCODING_AV1 it
-  is one shown frame per plane (<<ife-tile-av1>>).
+  is one shown frame per plane (<<ife-tile-av1>>), and a
+  TILE_ENCODING_UASTC or TILE_ENCODING_XUASTC stream carries one plane
+  (<<ife-tile-uastc>>, <<ife-tile-xuastc>>).
 
 Z_PLANES is a per-layer maximum rather than a per-tile count for two reasons:
 focal depth is a property of the acquisition, and a pyramid is normally
@@ -668,6 +670,84 @@ defined by the AV1 Bitstream and Decoding Process Specification
 NOTE: This version does not specify which focal plane is coded as the key
 frame, nor how the decode order of a stream's shown frames maps to focal
 depth. Both are open as of 2026-11-25.
+
+[[ife-tile-uastc]]
+===== UASTC Tile Byte-Streams
+
+Where the tile table's ENCODING is TILE_ENCODING_UASTC, each tile byte-stream
+holds GPU block-compressed texture data in UASTC LDR 4x4, the 4x4-pixel,
+16-byte-block subset of ASTC LDR 4x4 defined by Basis Universal
+(https://github.com/BinomialLLC/basis_universal/wiki/UASTC-LDR-4x4-Texture-Specification[UASTC
+LDR 4x4 Texture Specification]), stored bare:
+
+* The byte-stream *shall* be exactly one Zstandard frame
+  (https://www.rfc-editor.org/rfc/rfc8878[RFC 8878], section 3.1.1). It
+  *shall not* be wrapped in a KTX2, .basis or other container, and *shall
+  not* carry skippable frames.
+* The frame's decompressed content *shall* be the tile's UASTC LDR 4x4 blocks,
+  16 bytes each, in raster order: left to right along a row of blocks, and
+  rows from the top of the tile to the bottom. A tile of edge TILE_LENGTH
+  (<<ife-tile-length>>) is ceil(TILE_LENGTH / 4) blocks wide and as many
+  high, and the decompressed content *shall* be 16 bytes per block, with
+  nothing before or after the blocks: 65 536 bytes for a 256-pixel tile.
+* Where TILE_LENGTH is not a multiple of four, the pixels of the last column
+  and row of blocks that lie beyond the tile's edge carry no image content,
+  and a decoder *shall* ignore them.
+* The byte-stream *shall* carry one focal plane: where a tile frame
+  (<<ife-tile-frame>>) precedes it, the frame's Z_PLANES *shall* be 0 or 1.
+* The byte-stream *shall* carry one image, the tile at full resolution (mip
+  level 0).
+
+The tile table records the encoding, pixel format and tile length once for
+every tile, so a per-tile container would repeat them; the stream is stored
+bare for that reason. A decoder transcodes the blocks to a format its GPU
+samples. UASTC LDR 4x4 is a subset of ASTC LDR 4x4, so a transcode to ASTC 4x4
+is lossless, and a transcode to BC7 loses about 0.75 to 1.5 dB of RGB PSNR
+relative to ASTC (UASTC LDR 4x4 Texture Specification, read 2026-11-25).
+
+[[ife-tile-xuastc]]
+===== XUASTC Tile Byte-Streams
+
+Where the tile table's ENCODING is TILE_ENCODING_XUASTC, each tile byte-stream
+holds GPU block-compressed texture data in XUASTC LDR, Basis Universal's
+supercompressed form of ASTC LDR
+(https://github.com/BinomialLLC/basis_universal/wiki/XUASTC-LDR-Specification-v1.0[XUASTC
+LDR Specification v1.0]), stored bare:
+
+* The byte-stream *shall* be exactly one XUASTC LDR bitstream, which that
+  specification defines as one image. It *shall not* be wrapped in a KTX2,
+  .basis or other container.
+* The bitstream's stream version *shall* be 1, and its Actual Width and
+  Actual Height *shall* each equal TILE_LENGTH (<<ife-tile-length>>).
+* The block footprint is the one the bitstream's ASTC Block Size Index names.
+  This version does not restrict it.
+* The byte-stream *shall* carry one focal plane: where a tile frame
+  (<<ife-tile-frame>>) precedes it, the frame's Z_PLANES *shall* be 0 or 1.
+* The byte-stream *shall* carry one image, the tile at full resolution (mip
+  level 0).
+
+NOTE: The XUASTC LDR specification describes itself as preliminary and
+subject to change (read 2026-11-25). Whether an XUASTC LDR bitstream written
+today stays decodable by later Basis Universal versions, and which block
+footprint this encoding requires (4x4 is proposed), are open as of
+2026-11-25.
+
+[[ife-tile-block-levels]]
+===== Mip Levels of Block-Compressed Tiles
+
+A GPU block-compressed format can be neither blitted nor written by a compute
+shader, so a decoder cannot make a block-compressed tile's mip levels from its
+full-resolution image. It is proposed that a TILE_ENCODING_UASTC or
+TILE_ENCODING_XUASTC byte-stream carry them: for a 256-pixel tile, levels of
+256, 128 and 64 pixels, each a stream of the kind above, finest first, with
+each level's size recorded in the tile frame.
+
+This version does not define them. The tile frame is optional on a layer that
+is not Z-stacked and records no stream length (<<ife-tile-frame>>), and tile
+byte-streams carry no header (<<ife-tile-pixel-data>>), so where the level
+boundaries are recorded is open as of 2026-11-25. Until it is decided, a
+byte-stream of either encoding carries level 0 alone, and a decoder reads
+level 0 from the stream's first byte.
 
 [[ife-tile-frame]]
 ===== The Tile Frame

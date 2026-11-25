@@ -382,8 +382,10 @@ public:
      * Z-stacked one). Returns the stream's offset — the anchor the tile
      * offsets entry names; a frame, when written, sits just before it. Under
      * TILE_ENCODING_AV1, @p data is a bare AV1 sequence in the Low Overhead
-     * Bitstream Format with one shown frame per plane; the Builder stores the
-     * bytes without parsing them.
+     * Bitstream Format with one shown frame per plane; under
+     * TILE_ENCODING_UASTC it is one Zstandard frame of UASTC LDR 4x4 blocks,
+     * and under TILE_ENCODING_XUASTC one XUASTC LDR bitstream, each one plane
+     * at full resolution. The Builder stores the bytes without parsing them.
      *
      * @throws std::logic_error before `set_tile_table` or after `finalize`,
      *         or if the tile was already appended; std::out_of_range for a bad
