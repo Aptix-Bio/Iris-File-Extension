@@ -4,7 +4,7 @@
  *        freeze the exact IFE surface Iris-Slide consumes, so a migration edit
  *        fails HERE before it reaches the codec's own build.
  *
- * WHY THIS EXISTS. Iris-Slide (`/Users/ryanlandvater/GitHub/Iris-Slide`) pulls
+ * WHY THIS EXISTS. Iris-Slide (https://github.com/Aptix-Bio/Iris-Slide) pulls
  * IFE with `FetchContent(GIT_TAG "origin/main")` and links the objects with
  * `IFE_EXPORT=`. There is no version pin between them: a rename or a removed
  * member on IFE `main` breaks every codec build on its next configure. This

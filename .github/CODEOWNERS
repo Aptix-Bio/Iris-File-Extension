@@ -1,0 +1,20 @@
+# Who must review what (CI-3, development/WBS.md). The review bot reads the logins on the last `*` line as
+# the owners whose replies in a pull request's conversation may grant an exception to a rubric
+# item. GitHub applies the last pattern that matches a path ("the last matching pattern takes the
+# most precedence": docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners,
+# read 2026-11-24), so the narrower lines below the `*` line keep their owner. The bot is never a
+# code owner. When a second maintainer joins, add them here.
+
+*                                   @ryanlandvater
+
+# The rules, the specification and the workflows that enforce them, named explicitly and last:
+# GitHub applies the last matching line, so a narrower line added above these cannot take them out
+# of the maintainer's hands.
+/.github/review/                    @ryanlandvater
+/.github/workflows/                 @ryanlandvater
+/.github/CODEOWNERS                 @ryanlandvater
+/cmake/                             @ryanlandvater
+/spec/                              @ryanlandvater
+/tests/wire/witness.json            @ryanlandvater
+/development/*.md                   @ryanlandvater
+/tools/                             @ryanlandvater

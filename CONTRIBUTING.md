@@ -1,8 +1,8 @@
 # Contributing to Iris-File-Extension
 
 Thanks for contributing. IFE is a binary slide format — the bar for
-correctness is high, and a few rules are absolute. Read `README.md`, the
-cross-pollination work orders at the top of `MIGRATION.md`, and this page
+correctness is high, and a few rules are absolute. Read `README.md`,
+`development/README.md` (how work is planned and tracked), and this page
 before opening a PR.
 
 ## The absolutes
@@ -114,8 +114,9 @@ Traps that have already cost this project time:
 
 ## Picking work
 
-Pending work lives in the cross-pollination work orders at the top of
-`MIGRATION.md` and in the phase plans below them. Claim one task ID per
-session, run the task's *Locate* block before touching anything, and keep the
-diff scoped to that task. Unless the order says to commit, leave changes in
-the working tree and report.
+Pending work lives in `development/WBS.md`, each item under the ID it has
+carried since it was filed (`RB-5`, `RC-10.4`, `R-3.1`). Name the branch after
+the item (`<kind>/<WorkPackage>_<n>`), keep the diff scoped to that item, and
+tick each step with its evidence and the commit that did the work
+(`development/README.md`, update rule). The dated records behind the items are
+in `development/analysis/`.

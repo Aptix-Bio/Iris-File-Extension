@@ -36,7 +36,7 @@ name: CI
 # The pattern across the last three: a branch no developer machine executes is
 # a branch no test can check, so each gets a job rather than a comment.
 #
-# Runners (CI-1 in TASKS.md, decided 2026-11-24): every job runs on a
+# Runners (CI-1 in development/WBS.md, decided 2026-11-24): every job runs on a
 # Blacksmith runner at a label documented in
 # https://docs.blacksmith.sh/blacksmith-runners/overview (read 2026-11-24),
 # pinned to the OS version the -latest label ran:
@@ -62,6 +62,11 @@ jobs:
       - uses: actions/checkout@v7
       - name: Every job on a pinned Blacksmith runner
         run: python3 tools/runner_labels_lint.py
+      # CI-3: review.yml runs under pull_request_target with the model key;
+      # this fails a change that would let it check out or run a pull
+      # request's code, widen a job's token, or move a secret.
+      - name: The review bot's workflow stays safe under pull_request_target
+        run: cmake -P cmake/check_review_configuration.cmake
       - run: python3 -m generator --validate
       - run: python3 -m generator
       - run: python3 -m generator --check
@@ -319,9 +324,9 @@ jobs:
       # CMAKE_CROSSCOMPILING_EMULATOR, so ctest calls the emulator directly
       # and nothing depends on a binfmt_misc registration. The registration
       # docker/setup-qemu-action made did not hold on Blacksmith's runner VMs
-      # and every s390x container failed with "exec format error" (TASKS.md,
-      # CI-2). Generation and the corpus fetch run at configure on the host;
-      # only the test binaries are emulated.
+      # and every s390x container failed with "exec format error"
+      # (development/WBS.md, CI-2). Generation and the corpus fetch run at
+      # configure on the host; only the test binaries are emulated.
       - name: Install the s390x cross compiler and QEMU user mode
         run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends g++-s390x-linux-gnu qemu-user ninja-build
       # The whole ctest suite under emulation, including the three suites that

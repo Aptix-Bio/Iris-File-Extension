@@ -662,7 +662,7 @@ struct IFE_EXPORT File {
 // IFE_-prefixed names are that type's *global* spelling, for a consumer that
 // does not want to qualify with Iris::File:: on every line. The IFE_ prefix is
 // the namespace spelled out — the same convention FastFHIR's FF_ aliases use
-// (../FastFHIR/include/FastFHIR.hpp). Alias only: nothing here renames a
+// (FastFHIR's include/FastFHIR.hpp). Alias only: nothing here renames a
 // namespaced symbol, so existing consumers (Iris-Slide) are unaffected.
 //
 // The file-map aliases (FileMap, MapEntryType, Gap, ...) live in

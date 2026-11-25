@@ -1,0 +1,368 @@
+# CI-3 (development/WBS.md): the review bot's workflow keeps the
+# safety properties that make `pull_request_target` safe in a public repository, and the files the
+# bot reads from the default branch exist.
+#
+#   cmake -P cmake/check_review_configuration.cmake      (from the repository root)
+#
+# Exits non-zero naming each broken property. The workflow is read as text, one step at a time,
+# as tools/runner_labels_lint.py reads every workflow, so no YAML parser is needed:
+#   - the trigger is `pull_request_target` alone, and the top-level token has no permission;
+#   - every checkout of this repository is the default branch's commit (`github.sha`), and the
+#     head's commit reaches a step only as HEAD_SHA, data for the bot's API calls; nothing fetches,
+#     checks out or runs the pull request's code;
+#   - each job holds least privilege: the job with the model key can read and cannot write, the
+#     job that writes never sees the key;
+#   - both review jobs run only for a pull request from a branch of this repository, and a
+#     fork's pull request gets a job, reading only its script, that states why it is skipped;
+#   - GOVERNANCE_READ_TOKEN reaches only the step that checks out Aptix-Bio/governance at the
+#     pinned commit, and every other action is pinned by a full commit SHA;
+#   - pull request text reaches a `run:` script only through `env:`, and every job is bounded;
+#   - every `run:` step is one command, `cmake [-D<name>=<value>]... -P base/cmake/<name>.cmake`
+#     of a script that exists, its logic in the script (development/ci_runners.md, "Workflows are simple; CMake does the
+#     work"), so no shell line in the workflow can reach the model key or the write token.
+# GitHub, "Securely using pull_request_target" and "Secure use reference" (docs.github.com,
+# read 2026-11-24) give the reasons; development/WBS.md, CI-3, the sources. The `spec` job in
+# .github/workflows/ci.yml runs it on every pull request.
+cmake_minimum_required(VERSION 3.20)
+
+if(NOT DEFINED REPOSITORY)
+    set(REPOSITORY "${CMAKE_CURRENT_LIST_DIR}/..")
+endif()
+set(workflow_path "${REPOSITORY}/.github/workflows/review.yml")
+# Each problem is counted in a global property, so that a helper function at any depth can
+# report one; a variable set with PARENT_SCOPE reaches only the helper's own caller.
+function(problem text)
+    message(SEND_ERROR "review configuration: ${text}")
+    set_property(GLOBAL APPEND PROPERTY review_configuration_problems x)
+endfunction()
+function(stop_on_problems)
+    get_property(found GLOBAL PROPERTY review_configuration_problems)
+    list(LENGTH found count)
+    if(count GREATER 0)
+        message(FATAL_ERROR "${count} review configuration problem(s); see above")
+    endif()
+endfunction()
+
+# The files the bot and GitHub read from the default branch.
+foreach(required .github/workflows/review.yml .github/review/rubric.toml .github/CODEOWNERS
+                 .github/pull_request_template.md)
+    if(NOT EXISTS "${REPOSITORY}/${required}")
+        problem("${required} is missing")
+    endif()
+endforeach()
+stop_on_problems()
+
+# A CMake list splits on ';' and will not split inside '[' ... ']'; workflow text carries both,
+# so they are replaced before the text is split into lines or steps.
+function(escaped out text)
+    string(REPLACE ";" "<semicolon>" text "${text}")
+    string(REPLACE "[" "<open>" text "${text}")
+    string(REPLACE "]" "<close>" text "${text}")
+    set(${out} "${text}" PARENT_SCOPE)
+endfunction()
+file(READ "${workflow_path}" raw)
+escaped(workflow "${raw}")
+
+# --- the trigger and the workflow-level token -----------------------------------------------
+escaped(trigger [=[
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+]=])
+string(FIND "${workflow}" "\n${trigger}" at)
+if(at EQUAL -1)
+    problem("the trigger is not `pull_request_target` alone with types [opened, synchronize, reopened, ready_for_review]")
+endif()
+string(FIND "${workflow}" "\npermissions: {}\n" at)
+if(at EQUAL -1)
+    problem("the workflow-level `permissions: {}` is missing")
+endif()
+set(pin "")
+if(workflow MATCHES "\n  GOVERNANCE_COMMIT: ([0-9a-f]+)\n")
+    set(pin "${CMAKE_MATCH_1}")
+endif()
+string(LENGTH "${pin}" length)
+if(NOT length EQUAL 40)
+    problem("the workflow-level env GOVERNANCE_COMMIT is not a full 40-character commit SHA")
+endif()
+
+# --- the jobs ---------------------------------------------------------------------------------
+string(FIND "${workflow}" "\njobs:\n" jobs_at)
+if(jobs_at EQUAL -1)
+    message(FATAL_ERROR "review configuration: no `jobs:` in ${workflow_path}")
+endif()
+string(SUBSTRING "${workflow}" ${jobs_at} -1 jobs_text)
+string(REGEX MATCHALL "\n  [a-z][a-z-]*:\n" job_headers "${jobs_text}")
+set(job_names "")
+foreach(header IN LISTS job_headers)
+    string(STRIP "${header}" header)
+    string(REGEX REPLACE ":$" "" header "${header}")
+    list(APPEND job_names "${header}")
+endforeach()
+foreach(expected review code-review fork-skipped)
+    if(NOT expected IN_LIST job_names)
+        problem("job `${expected}` is missing (jobs: ${job_names})")
+    endif()
+endforeach()
+# Each job's text, from its header to the next job's.
+foreach(name IN LISTS job_names)
+    string(FIND "${jobs_text}" "\n  ${name}:\n" begin)
+    math(EXPR body_begin "${begin} + 1")
+    string(SUBSTRING "${jobs_text}" ${body_begin} -1 rest)
+    string(REGEX MATCH "\n  [a-z][a-z-]*:\n" next "${rest}")
+    if(next)
+        string(FIND "${rest}" "${next}" end)
+        string(SUBSTRING "${rest}" 0 ${end} rest)
+    endif()
+    set(job_${name} "${rest}\n")
+    if(NOT rest MATCHES "\n    timeout-minutes: [0-9]+\n")
+        problem("job `${name}` has no timeout-minutes")
+    endif()
+endforeach()
+
+set(same_repository "github.event.pull_request.head.repo.full_name == github.repository")
+set(fork "github.event.pull_request.head.repo.full_name != github.repository")
+foreach(name review code-review)
+    string(REGEX MATCH "\n    if: [^\n]*" condition "${job_${name}}")
+    string(FIND "${condition}" "${same_repository}" at)
+    if(at EQUAL -1)
+        problem("job `${name}` does not require `${same_repository}`")
+    endif()
+endforeach()
+string(REGEX MATCH "\n    if: [^\n]*" condition "${job_fork-skipped}")
+string(FIND "${condition}" "${fork}" at)
+if(at EQUAL -1)
+    problem("job `fork-skipped` does not run on `${fork}`")
+endif()
+if(NOT job_fork-skipped MATCHES "\n    permissions:\n      contents: read\n    [a-z]")
+    problem("job `fork-skipped` does not hold exactly contents: read, for the checkout of its script")
+endif()
+if(NOT job_review MATCHES "\n    permissions:\n      contents: read\n      pull-requests: read\n    [a-z]")
+    problem("job `review` does not hold exactly contents: read and pull-requests: read")
+endif()
+if(NOT job_code-review MATCHES "\n    permissions:\n      contents: read\n      pull-requests: write\n    [a-z]")
+    problem("job `code-review` does not hold exactly contents: read and pull-requests: write")
+endif()
+# pull_request_target reads the default branch's cache scope read-only unless a job declares a
+# write-capable cache-mode; only the review job, which runs nothing from the pull request, saves.
+string(FIND "${job_review}" "\n    cache-mode: write\n" at)
+if(at EQUAL -1)
+    problem("job `review` does not declare `cache-mode: write`; its conversation would never be saved")
+endif()
+foreach(name IN LISTS job_names)
+    if(NOT name STREQUAL "review" AND job_${name} MATCHES "cache-mode: *write")
+        problem("job `${name}` may write the cache; only `review` may")
+    endif()
+    if(NOT name STREQUAL "review" AND job_${name} MATCHES "secrets\\.ANTHROPIC_KEY")
+        problem("job `${name}` sees ANTHROPIC_KEY; only `review`, which cannot write, may")
+    endif()
+endforeach()
+
+# --- every step -------------------------------------------------------------------------------
+escaped(base_checkout [=[ref: ${{ github.sha }}]=])
+escaped(governance_ref [=[ref: ${{ env.GOVERNANCE_COMMIT }}]=])
+escaped(token_use [=[token: ${{ secrets.GOVERNANCE_READ_TOKEN }}]=])
+escaped(token_check [=[GOVERNANCE_READ_TOKEN: ${{ secrets.GOVERNANCE_READ_TOKEN != '' }}]=])
+escaped(head_data [=[HEAD_SHA: ${{ github.event.pull_request.head.sha }}]=])
+set(fetches_code "(git (checkout|fetch|switch|clone|pull)|gh pr checkout|refs/pull/|github\\.head_ref)")
+
+# A step names each string after `what`, or a problem names the one it lacks.
+function(require_in_step step first what)
+    foreach(needed IN LISTS ARGN)
+        string(FIND "${step}" "${needed}" at)
+        if(at EQUAL -1)
+            problem("step '${first}': ${what} lacks '${needed}'")
+        endif()
+    endforeach()
+endfunction()
+
+# The action a step uses: a checkout is of this repository's default-branch commit or of the
+# governance repository at the pin, the one local action is the bot's, and every other action is
+# pinned by a full commit SHA. Counts the governance checkouts in the caller's scope.
+function(check_step_action step first)
+    if(step MATCHES "${fetches_code}")
+        problem("step '${first}': '${CMAKE_MATCH_0}' fetches or names the pull request's code")
+    endif()
+    if(NOT step MATCHES "(^|\n) *uses: ([^ \n]+)")
+        return()
+    endif()
+    set(action "${CMAKE_MATCH_2}")
+    if(action MATCHES "^\\./")
+        if(NOT action STREQUAL "./governance/review-bot")
+            problem("step '${first}': local action '${action}'; only ./governance/review-bot runs from a checkout")
+        endif()
+        return()
+    endif()
+    if(action MATCHES "^actions/checkout@" AND step MATCHES "\n *repository: Aptix-Bio/governance\n")
+        math(EXPR count "${governance_checkouts} + 1")
+        set(governance_checkouts ${count} PARENT_SCOPE)
+        require_in_step("${step}" "${first}" "the governance checkout"
+                        "${governance_ref}" "${token_use}" "persist-credentials: false" "path: governance")
+    elseif(action MATCHES "^actions/checkout@")
+        require_in_step("${step}" "${first}" "a checkout of this repository"
+                        "${base_checkout}" "persist-credentials: false")
+    endif()
+    if(NOT action MATCHES "@([0-9a-f]+)$")
+        problem("step '${first}': '${action}' is not pinned by commit SHA")
+        return()
+    endif()
+    string(LENGTH "${CMAKE_MATCH_1}" length)
+    if(NOT length EQUAL 40)
+        problem("step '${first}': '${action}' is not pinned by a full 40-character SHA")
+    endif()
+endfunction()
+
+# Line by line: the head only as HEAD_SHA, the governance token only in its checkout or its
+# presence check, no expression inside a run: script, and each run: one `cmake -P` of a script in
+# the base checkout.
+function(check_step_lines step first)
+    string(REPLACE "\n" ";" lines "${step}")
+    set(run_indent -1)
+    foreach(line IN LISTS lines)
+        string(STRIP "${line}" stripped)
+        string(REGEX MATCH "^ +" indent "${line}")  # no match leaves it empty: CMake before 4 refuses a match of nothing
+        string(LENGTH "${indent}" indent)
+        if(run_indent GREATER_EQUAL 0 AND (indent LESS_EQUAL run_indent AND NOT stripped STREQUAL ""))
+            set(run_indent -1)
+        endif()
+        string(FIND "${line}" "github.event.pull_request.head" at)
+        if(NOT at EQUAL -1 AND NOT stripped STREQUAL head_data)
+            problem("step '${first}': '${stripped}' uses the head beyond HEAD_SHA")
+        endif()
+        string(FIND "${line}" "secrets.GOVERNANCE_READ_TOKEN" at)
+        if(NOT at EQUAL -1 AND NOT stripped STREQUAL token_use AND NOT stripped STREQUAL token_check)
+            problem("step '${first}': '${stripped}' passes GOVERNANCE_READ_TOKEN beyond the governance checkout")
+        endif()
+        if(stripped STREQUAL token_use AND NOT step MATCHES "\n *repository: Aptix-Bio/governance\n")
+            problem("step '${first}': the governance token is given to a step that is not the governance checkout")
+        endif()
+        string(FIND "${line}" "\${{" expression)
+        set(in_run FALSE)
+        if(run_indent GREATER_EQUAL 0 OR stripped MATCHES "^(- )?run: ")
+            set(in_run TRUE)
+        endif()
+        if(in_run AND NOT expression EQUAL -1)
+            problem("step '${first}': an expression inside a run: script; pass it through env:")
+        endif()
+        if(stripped MATCHES "^(- )?run: cmake( -D[^ ]+)* -P base/(cmake/[a-z_]+\\.cmake)$")
+            if(NOT EXISTS "${REPOSITORY}/${CMAKE_MATCH_3}")
+                problem("step '${first}': runs ${CMAKE_MATCH_3}, which does not exist")
+            endif()
+        elseif(stripped MATCHES "^(- )?run: ")
+            problem("step '${first}': '${stripped}' is not one `cmake -P base/cmake/<name>.cmake` command")
+        endif()
+        if(stripped MATCHES "^(- )?run: [|>]")
+            set(run_indent ${indent})
+        endif()
+    endforeach()
+endfunction()
+
+string(REPLACE "\n      - " ";" steps "${jobs_text}")
+list(REMOVE_AT steps 0)
+list(LENGTH steps step_count)
+if(step_count EQUAL 0)
+    problem("no steps found")
+endif()
+set(governance_checkouts 0)
+foreach(step IN LISTS steps)
+    # The last step of a job runs on to the next job's header; cut it there.
+    string(REGEX MATCH "\n  [a-z][a-z-]*:\n" next_job "${step}")
+    if(next_job)
+        string(FIND "${step}" "${next_job}" end)
+        string(SUBSTRING "${step}" 0 ${end} step)
+    endif()
+    string(REGEX MATCH "^[^\n]+" first "${step}")
+    check_step_action("${step}" "${first}")
+    check_step_lines("${step}" "${first}")
+endforeach()
+if(NOT governance_checkouts EQUAL 2)
+    problem("${governance_checkouts} checkout(s) of Aptix-Bio/governance; `review` and `code-review` need one each")
+endif()
+
+# --- what the bot reads from the default branch ---------------------------------------------
+file(READ "${REPOSITORY}/.github/review/rubric.toml" rubric)
+string(FIND "${rubric}" "reference_files = [" begin)
+set(references "")
+if(NOT begin EQUAL -1)
+    string(SUBSTRING "${rubric}" ${begin} -1 rest)
+    string(FIND "${rest}" "]" end)
+    string(SUBSTRING "${rest}" 0 ${end} rest)
+    string(REGEX MATCHALL "\"[^\"]+\"" references "${rest}")
+endif()
+if(NOT references)
+    problem("the rubric names no reference_files")
+endif()
+foreach(reference IN LISTS references)
+    string(REPLACE "\"" "" reference "${reference}")
+    if(NOT EXISTS "${REPOSITORY}/${reference}")
+        problem("the rubric's reference file ${reference} is missing; the bot fails every review by name")
+    endif()
+endforeach()
+if(NOT rubric MATCHES "\n\\[trace\\]\n(#[^\n]*\n)*item = \"Traceability\"\n")
+    problem("the rubric's [trace] table does not name the Traceability item")
+endif()
+# The files whose ticks and rows must link their work commit (development/WBS.md, development/RTM.md):
+# a [trace] entry naming a file that does not exist matches no line, so every tick would go
+# unchecked and the item would pass on nothing.
+string(FIND "${rubric}" "\n[trace]\n" trace_at)
+set(traced "")
+if(NOT trace_at EQUAL -1)
+    math(EXPR trace_at "${trace_at} + 1")
+    string(SUBSTRING "${rubric}" ${trace_at} -1 trace_text)
+    string(FIND "${trace_text}" "\n[" next_table)
+    if(NOT next_table EQUAL -1)
+        string(SUBSTRING "${trace_text}" 0 ${next_table} trace_text)
+    endif()
+    foreach(key ticks rows)
+        if(trace_text MATCHES "\n${key} = \\[([^]\n]*)\\]")
+            string(REGEX MATCHALL "\"[^\"]+\"" names "${CMAKE_MATCH_1}")
+            list(APPEND traced ${names})
+        endif()
+    endforeach()
+endif()
+if(NOT traced)
+    problem("the rubric's [trace] table names no ticks or rows file")
+endif()
+foreach(name IN LISTS traced)
+    string(REPLACE "\"" "" name "${name}")
+    if(NOT EXISTS "${REPOSITORY}/${name}")
+        problem("the rubric's [trace] file ${name} is missing; its ticks would go unchecked")
+    endif()
+endforeach()
+file(STRINGS "${REPOSITORY}/.github/CODEOWNERS" owners REGEX "^[^#]")
+set(catch_all "")
+foreach(line IN LISTS owners)
+    if(line MATCHES "^\\*[ \t]")
+        set(catch_all "${line}")
+    endif()
+endforeach()
+# The maintainer is named in CODEOWNERS alone, so the owners here are read from its catch-all line:
+# the review bot takes those logins as the owners who may grant an exception, and the rules and
+# workflows must belong to the same owners.
+string(REGEX REPLACE "^\\*[ \t]+" "" maintainers "${catch_all}")
+string(STRIP "${maintainers}" maintainers)
+if(NOT maintainers MATCHES "^@[A-Za-z0-9-]+([ \t]+@[A-Za-z0-9-]+)*$")
+    problem("CODEOWNERS' last '*' line, whose owners may grant an exception, names no @login (or names a team or an email): '${catch_all}'")
+endif()
+# The owners on the last CODEOWNERS line for `path`, empty when no line names it: GitHub applies
+# the last pattern that matches.
+function(last_owners out path)
+    string(REPLACE "." "\\." pattern "${path}")
+    set(found "")
+    foreach(line IN LISTS owners)
+        if(line MATCHES "^${pattern}[ \t]+(.*)$")
+            string(STRIP "${CMAKE_MATCH_1}" found)
+        endif()
+    endforeach()
+    set(${out} "${found}" PARENT_SCOPE)
+endfunction()
+foreach(path /.github/review/ /.github/workflows/)
+    last_owners(path_owners "${path}")
+    if(NOT path_owners STREQUAL maintainers)
+        problem("CODEOWNERS' last line for ${path} does not give it to the catch-all's owners (${maintainers})")
+    endif()
+endforeach()
+
+stop_on_problems()
+message(STATUS "review configuration: pull_request_target with base-only checkouts, least privilege, forks skipped, token confined, SHA pins")

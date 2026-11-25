@@ -1,7 +1,7 @@
 /**
  * @file ife_recovery_tests.cpp
- * @brief The recovery census (MIGRATION.md RB-3), tested as FastFHIR tests its
- *        own (`../FastFHIR/tests/cpp/test_recovery.cpp`: check_clean_census,
+ * @brief The recovery census (development/WBS.md, RB-3), tested as FastFHIR tests
+ *        its own (FastFHIR's `tests/cpp/test_recovery.cpp`: check_clean_census,
  *        census_single_flip_sweep).
  *
  *   1. A clean file is one attached island: every block and stream hangs from

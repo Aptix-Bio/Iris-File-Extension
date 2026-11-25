@@ -251,9 +251,10 @@ for (auto it = map.lower_bound(write_location); it != map.end(); ++it) {
 
 The recovery engine — the two-witness reconciliation that repairs a bit-flipped
 file — is **currently being rebuilt** against FastFHIR's census design (see
-`MIGRATION.md`). It is not present in this revision. `generate_file_map` above
-is the remaining advanced entry point; until the engine returns, a file
-`abstract_file_structure` refuses cannot be reopened in-process.
+`development/WBS.md`, RB-4 to RB-9). It is not present in this revision.
+`generate_file_map` above is the remaining advanced entry point; until the
+engine returns, a file `abstract_file_structure` refuses cannot be reopened
+in-process.
 
 ## Language Bindings
 

@@ -1,0 +1,273 @@
+# The review bot's rubric (CI-3, development/WBS.md). One [[item]] per checkbox the bot ticks in
+# the pull request's "Agent review" section. The bot runs from Aptix-Bio/governance at the commit
+# .github/workflows/review.yml pins, and loads this file, the files it names and
+# .github/CODEOWNERS from the default branch's commit, never from the pull request under review,
+# so a pull request cannot change the rules it is judged by.
+#
+# An item passes, fails, or does not apply. A failed item with blocking = true fails the
+# `code-review` check; a failed advisory item is reported only. Changing this file changes what
+# every later pull request is held to: it is a code-owner file (.github/CODEOWNERS) and its own
+# pull request says why.
+
+[review]
+product = "Iris-File-Extension (IFE), the public specification of the Iris slide file format and the C++20 library generated from it that reads, writes, validates and recovers those files, MIT-licensed"
+# The rules the model reviews against, read whole from the default branch; a missing one fails the
+# review by name. development/ holds the plan (development/README.md): the layering, block
+# governance and decisions (ARCHITECTURE.md), the work items and their ticks (WBS.md), the
+# requirements and their tests (RTM.md) and the pipeline rules (PIPELINE.md). WBS.md is sent whole
+# because the bot's excerpt mechanism matches only `PascalCase_n` IDs, which IFE's IDs (`CI-3.6`,
+# `RB-5`) are not. development/analysis/ holds the dated records and long write-ups and is not
+# sent. CLAUDE.md holds the design notes; CONTRIBUTING.md the append-only wire contract; spec/ the
+# format itself, whose JSON documents are the single source of truth for the generated code;
+# generator/README.md and tests/wire/README.md the drift gate and its witness. IFE keeps no
+# errata file.
+reference_files = [
+    "development/style_guide.md",
+    "development/ci_runners.md",
+    "development/README.md",
+    "development/ARCHITECTURE.md",
+    "development/PIPELINE.md",
+    "development/RTM.md",
+    "development/WBS.md",
+    "CONTRIBUTING.md",
+    "CLAUDE.md",
+    "spec/README.md",
+    "spec/ife_header.json",
+    "spec/ife_fields.json",
+    "spec/ife_constants.json",
+    "generator/README.md",
+    "tests/wire/README.md",
+]
+
+[trace]
+# Every new WBS tick, and every RTM row moved to these statuses, links to the GitHub commit that
+# did the work (`- [x] CI-2.1 **Title.** evidence [1234567](.../commit/<full hash>)`, or the
+# link in the row's status cell); a line that does not fails `item`. Checked by the bot itself,
+# without the model.
+item = "Traceability"
+ticks = ["development/WBS.md"]
+rows = ["development/RTM.md"]
+row_statuses = ["Implemented", "Verified"]
+
+[verification]
+# One maintainer: the pull request's author may give the final human verification until a second
+# maintainer joins.
+allow_author = true
+
+[[item]]
+id = "Traceability"
+title = "Traceability: the WBS items and RTM rows named; WBS ticks and RTM rows at Implemented or Verified carry evidence and a link to the work commit"
+blocking = true
+guidance = """
+The description names the work items it completes or advances as development/WBS.md numbers them
+(`CI-2.4`, `VL-1.1`, `RC-10`) and the RTM rows it touches (`Read_01`), and the branch is named
+`<kind>/<WorkPackage>_<n>` after one of the items. Every WBS box ticked in the diff has its
+evidence (a test and its result, a CI run and job, pasted output, a measurement) and, on the
+tick's own line, a link to the commit that did the work,
+`[1234567](https://github.com/Aptix-Bio/Iris-File-Extension/commit/<full hash>)`; every RTM row
+moved to Implemented or Verified links its commit the same way, in its status cell. The bot
+checks the links itself; judge only whether each linked commit plausibly does what the line
+claims. A change to code, the specification, the generator or a workflow without the matching
+WBS and RTM update in the same pull request fails (development/README.md, update rule). A
+package or row whose status names work still owed is updated when the diff completes that work.
+"""
+
+[[item]]
+id = "StyleGuide"
+title = "Style guide: `development/style_guide.md` followed (no recursion, nesting ≤ 3, RAII, early return, fail loudly with the offending value, `Result` at every API boundary, naming, prose)"
+blocking = true
+guidance = """
+Judge the lines the diff adds against development/style_guide.md, in full. The common failures:
+recursion (a walk over the block graph is a loop over an explicit queue); nesting deeper than 3;
+raw new/delete or a file mapping without an RAII owner; an exception crossing a public header's
+boundary (a function a consumer calls returns a `Result` under `Domain::IRIS_FILE_EXTENSION`);
+an error without its offending value; `catch (...)` anywhere but the last handler at a boundary;
+output to std::cout or std::cerr in place of a `Result`; a `switch` over an enumeration with
+`default:` (CLAUDE.md, Warnings); a bare number where a generated constant or scoped enumeration
+from spec/ belongs; side effects in conditions; commented-out or dead code; comments that restate
+the code. Prose in comments, documents and the description follows the guide's Writing section.
+A line that only keeps the naming of the code around it is judged as that code was. Name each
+violation with file and line.
+"""
+
+[[item]]
+id = "MinimumSurface"
+title = "Minimum code surface: no near-duplicate routines, no hand-written layout the generator owns, nothing outside IFE's scope"
+blocking = true
+guidance = """
+Similar routines are one routine with an enum or optional argument; repeated code is extracted; a
+new function that already exists is a failure. Offsets, sizes, recovery tags and enumeration
+values are derived from spec/*.json by the generator; a hand-written copy of one in src/, include/
+or tests/ fails. The vocabulary Iris-Headers provides (Result, Buffer, Memory and the rest) is
+reused, never re-implemented. IFE defines byte structure only: compression, decompression, colour handling and
+anything that interprets a tile stream belong to Iris-Slide (CLAUDE.md, "Tile stream contents are
+not this library's business") and fail here. A new public header, exported symbol or build option
+is justified in the description.
+"""
+
+[[item]]
+id = "TestsFirst"
+title = "Tests: new behaviour has a test that was shown red first; per-cell results reported; no test weakened to pass"
+blocking = true
+guidance = """
+Behaviour added or changed by the diff is covered by a test in the same pull request (a C++ test
+under tests/ registered in tests/tests.cmake and tests/tests.bzl, a generator test under
+tests/generator/, a lint under tools/, or a `cmake -P` check under cmake/). The description's
+"Red first" section shows the failing run at its commit (the command and its failure) and "Test
+results" the passing run, per CI cell. A test deleted, skipped, loosened, or given a narrower
+input must be explained in the description; unexplained, it fails. A test that records existing
+behaviour may never have been red; the description says so. Documentation-only pull requests: not
+applicable.
+"""
+
+[[item]]
+id = "SpecLedger"
+title = "Specification ledger: spec/*.json changes are append-only, the wire witness is refreshed in the same change, and nothing generated is hand-edited or committed"
+blocking = true
+guidance = """
+spec/ife_header.json, spec/ife_fields.json and spec/ife_constants.json are the single source of
+truth for the wire (spec/README.md; CONTRIBUTING.md, "The absolutes"). A change to them is
+append-only: a field, block, enumeration member or constant already in a version group is never
+moved, resized, retyped, renamed, reordered or removed; new facts arrive only as a new
+`ife_version` group, a new field at the end of a group, a new block with the next recovery tag, or
+a new member; a recovery-tag value is never written by hand; a member is retired only with
+`deprecated` (version and reason) and keeps its value. A diff that edits a shipped fact fails,
+whatever the generator's gate says. A spec addition refreshes tests/wire/witness.json in the same
+pull request (`python3 tools/refresh_witness.py`); a witness change without a matching spec change,
+or one that alters a shipped fact rather than adding one, fails unless the description justifies
+it as a reviewed wire correction recorded in tests/wire/README.md. Generated output matches the
+generator: generated_source/ and generated_docs/ are produced by `python3 -m generator` at
+configure, are ignored by git apart from their README.md, and are never hand-edited or committed
+(fix the emitter in generator/emit/ instead). The spec job proves it with `--validate` (consistency
+and the append-only gate against the committed witness), a regeneration, and `--check` (every
+generated file's banner witness hash matches the current spec, and the witness is not stale); the
+description's test results show that job green. A ratified version's corpus fixture is never
+rewritten (CONTRIBUTING.md, "What a wire change requires"). A diff that touches none of spec/,
+generator/, tests/wire/ or the generated directories: not applicable.
+"""
+
+[[item]]
+id = "ByteOrderAndPortability"
+title = "Byte order and portability: little-endian on disk on every host, through IFE_Bytes; the s390x job and the portability lint stay green"
+blocking = true
+guidance = """
+IFE stores every multi-byte value little-endian on disk at every version (spec/ife_spec.adoc;
+include/IFE_Bytes.hpp), which is a claim about every host. New code that reads or writes the file
+goes through the IFE_Bytes loads and stores or the generated handles; a `memcpy`,
+`reinterpret_cast` or pointer cast of file bytes into a multi-byte integer, or a check of the
+host's byte order outside IFE_Bytes, fails. The `big-endian (s390x)` CI job (`cmake --workflow
+--preset big-endian`: an s390x cross build whose every test binary runs under qemu-s390x, with
+`ife_host_byte_order_tests` failing unless the binaries execute big-endian) stays green, and a
+change to that job, its preset or cmake/toolchains/ keeps every test running emulated. The
+portability lint (`python3 tools/portability_lint.py`, in the spec job) stays green: no Windows
+SDK macro as a name, no Windows path through a string literal, every public header declared to
+Bazel. Code that builds on one of GCC, Clang, AppleClang, MSVC and Emscripten but not the others
+fails. Not applicable when the diff touches no C++, build file or byte-handling test.
+"""
+
+[[item]]
+id = "AbiAndConsumers"
+title = "Consumers: IFE depends only on Iris-Headers; a change that breaks Iris-Slide or another Iris-Headers consumer is a coordinated change"
+blocking = true
+guidance = """
+IFE depends on Iris-Headers and on nothing else first-party: a line that makes IFE include, link,
+fetch or call Iris-Slide (or any codec) fails, because Iris-Slide is IFE's consumer and the
+boundary is why the two repositories are separate. A change to anything a consumer compiles (a
+public header under include/, a generated type or enumeration value, an exported symbol, a
+function signature, a CMake or Bazel target name, an install path) states under "Consumer impact"
+what Iris-Slide and any other consumer must change. The `downstream` CI job (Iris-Slide built
+against this branch) is green, or the change is coordinated: the description names each
+consumer's pull request and the order in which they merge, since merging IFE first breaks the
+consumer's `main`. An enumeration value IFE shares with Iris-Headers stays equal to the
+specification's. A change that needs an unreleased Iris-Headers change names that pull request and
+merges after it. A change no consumer compiles: not applicable.
+"""
+
+[[item]]
+id = "PublicRepository"
+title = "Public repository: nothing private named, no maintainer quotations, no local paths, no patient data"
+blocking = true
+guidance = """
+Iris-File-Extension is public under MIT (its specification under CC BY-ND 4.0), and everything in
+it can be read by anyone. Judge only the lines the diff adds, in files and in the description. A
+line fails when it newly names a proprietary or private product, repository, internal
+infrastructure, cloud project or account. Two names are allowed where they are needed:
+Aptix-Bio/governance, as the private source of the review bot in .github/ and the documents
+describing the review; and the licensed codec, named only as a library that licensees load at
+runtime. The open-source slide library is Iris-Slide (renamed 2026-11-24); a line written after
+the rename does not call it Iris-Codec. A line that only keeps a name already on the line it edits
+is judged as it was. Also fails: a quotation of the maintainer or of a private conversation
+(state a decision as a dated requirement instead), a path on someone's machine (`/Users/...`,
+`C:\\Users\\...`, a home directory, a temporary directory), and anything that looks like patient
+data, a slide label or a slide file.
+"""
+
+[[item]]
+id = "SecurityImpact"
+title = "Security impact: the template's section is filled in and matches the diff (input parsing, dependencies, permissions, secrets)"
+blocking = true
+guidance = """
+Compare the "Security impact" answers with the diff. IFE parses untrusted files: new parsing of a
+file, a byte window or a network fetch bounds every offset and length against the mapped size
+before it is used, and a block is used only after its `validate()` passes (CLAUDE.md, "The read
+path"); the recovery scan treats every byte as hostile. A new dependency is under a permissive
+licence (MIT, BSD, Apache-2.0, BSL-1.0, Zlib, ISC) and pinned by version and hash. A new or widened
+workflow permission, secret, variable, environment or token is declared and justified. An answer
+the diff contradicts fails.
+"""
+
+[[item]]
+id = "Pipeline"
+title = "Pipeline: workflows pin actions by SHA, start from `permissions: {}`, pass untrusted input through `env:`, keep logic in CMake scripts and presets, bound every job"
+blocking = true
+guidance = """
+Only for changes under .github/, cmake/, tools/ or CMakePresets.json that touch CI
+(development/ci_runners.md). In a workflow the diff adds or a job it changes: every third-party
+action pinned by a full commit SHA with its version in a comment; `permissions: {}` at the top
+and per-job grants; checkout with `persist-credentials: false`; no `${{ }}` of untrusted input
+(titles, branch names, bodies) inside `run:`; every job has timeout-minutes and a documented
+Blacksmith label (`tools/runner_labels_lint.py`); a `run:` step is one command, `cmake --preset`,
+`cmake --workflow` or `cmake -P cmake/<name>.cmake`, with its logic in the script or preset. A
+job that needs a variable or secret checks it first (cmake/require_settings.cmake).
+`pull_request_target` appears only in .github/workflows/review.yml, which checks out only the
+default branch's commit and the bot's pinned commit, runs nothing from the head, runs its model
+jobs only for pull requests from this repository's own branches, and gives GOVERNANCE_READ_TOKEN
+only to the governance checkouts (cmake/check_review_configuration.cmake holds this). A change to
+this rubric, .github/CODEOWNERS, the review workflow or the bot's pin is flagged in the findings as
+needing the maintainer's explicit attention, whatever else it does. Older jobs in ci.yml that
+predate these rules are judged only on the lines the diff changes. Not applicable otherwise.
+"""
+
+[[item]]
+id = "DataProtection"
+title = "Data protection: no slides, slide metadata, patient data, secrets, keys or binaries in the diff"
+blocking = true
+guidance = """
+Nothing that looks like a patient identifier, accession number, slide label, date of birth, a
+real slide file (.iris, .svs, .ndpi, .tiff, DICOM), a credential, a private key or a token. No
+binary blobs: corpus fixtures are hosted and pinned by SHA-256 in tests/corpus/manifest.json and
+never committed, and test slides are built by the tests with tile streams of filler bytes. Any
+doubt fails, with the file and line.
+"""
+
+[[item]]
+id = "Documentation"
+title = "Documentation: docs describing several types carry Mermaid diagrams that match the code; the specification, README and design notes stay true"
+blocking = false
+guidance = """
+A document that describes more than one type or component has a Mermaid classDiagram (or a
+flowchart or sequenceDiagram for flow and lifecycle) that matches the code in this diff and
+renders. A change to the format updates spec/ife_spec.adoc's prose where the generated tables do
+not carry it. A decision that changed is recorded, dated, as an amendment in development/ARCHITECTURE.md §1. README.md stays true to how a consumer fetches, builds and links IFE, and its
+examples still compile (tests/readme/).
+"""
+
+[[item]]
+id = "AgentDisclosure"
+title = "AI authorship disclosed: which parts an agent wrote, and with which tool"
+blocking = true
+guidance = """
+The description's "AI authorship" section says whether an AI agent wrote any of the change and
+which parts, with which tool and model, and what the human did. Missing or blank fails. The bot
+does not try to detect authorship; it checks the disclosure is present and specific.
+"""
