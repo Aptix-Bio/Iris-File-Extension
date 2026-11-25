@@ -177,6 +177,16 @@
           "value": 3,
           "description": "AV1 compressed tiles. The tile byte-stream is a bare AV1 sequence in the Low Overhead Bitstream Format (AV1 Bitstream and Decoding Process Specification, section 5.2, https://aomediacodec.github.io/av1-spec/): OBUs only, each with obu_has_size_field equal to 1, inside no AVIF, ISOBMFF or IVF container. The stream carries one temporal unit, and so one shown frame, per focal plane; a single-plane tile is one key frame. Value 3 named AVIF compressed tiles until 2026-11-25, when it was reassigned to AV1; no file written before then is known to carry it."
         }
+      },
+      "1.1": {
+        "TILE_ENCODING_UASTC": {
+          "value": 4,
+          "description": "GPU block-compressed tiles in UASTC LDR 4x4, Basis Universal's 8-bit-per-pixel subset of ASTC LDR 4x4 (UASTC LDR 4x4 Texture Specification, https://github.com/BinomialLLC/basis_universal/wiki/UASTC-LDR-4x4-Texture-Specification). The tile byte-stream is one Zstandard frame (RFC 8878, section 3.1.1) inside no KTX2, .basis or other container; its decompressed content is the tile's mip levels back to back, finest first, as many as TILE_TABLE.MIP_LEVELS declares for the slide (decided 2026-11-25), each the 16-byte UASTC LDR 4x4 blocks of a level of L = TILE_LENGTH >> level pixels in raster order, ceil(L / 4) blocks to a row and as many rows, so each level's offset is computed and nothing is stored per tile. The stream carries one focal plane."
+        },
+        "TILE_ENCODING_XUASTC": {
+          "value": 5,
+          "description": "GPU block-compressed tiles in XUASTC LDR, Basis Universal's supercompressed ASTC LDR format (XUASTC LDR Specification v1.0, https://github.com/BinomialLLC/basis_universal/wiki/XUASTC-LDR-Specification-v1.0). The tile byte-stream is one XUASTC LDR bitstream, stream version 1, inside no KTX2, .basis or other container, whose Actual Width and Actual Height are TILE_LENGTH. The stream carries one focal plane and one image, the tile at full resolution: TILE_TABLE.MIP_LEVELS is 0 or 1 under this encoding, because an XUASTC LDR bitstream records no total length by which concatenated levels could be split (decided 2026-11-25). How an XUASTC tile could carry further levels, the block footprint (4x4 proposed), and whether the bitstream is fixed across Basis Universal versions are open as of 2026-11-25."
+        }
       }
     }
   },

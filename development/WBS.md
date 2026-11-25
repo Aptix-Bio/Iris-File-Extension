@@ -52,6 +52,7 @@ flowchart LR
     R3 --> RC5["RC-5 checksum footer<br/>1.2 material"]
     TE1["TE-1 tile encoding 3 is AV1<br/>doing"] --> OD["OD-T1 key plane,<br/>decode order to depth"]
     IV1["IV-1 I2S version<br/>packed in VERSION"]
+    TE2["TE-2 tile encodings 4, 5:<br/>UASTC, XUASTC<br/>doing"] --> OD2["OD-T3 XUASTC footprint<br/>OD-T4 XUASTC mip levels"]
     VL1["VL-1 parallel diagnostic log"]
     ZC["ZC-1..5 span read path"]
     BL["BL-1..7 backlog"]
@@ -66,6 +67,7 @@ touch different files from the recovery lane and can run beside it.
 | CI-3 | the review bot reviews every pull request; the plan moves to `development/` | `doing` (pull request #6) |
 | TE-1 | tile encoding value 3 is `TILE_ENCODING_AV1`, a bare AV1 sequence, in place of AVIF | `doing` (pull request #7, stacked on #6); TE-1.4 `blocked` on OD-T1 |
 | IV-1 | `ATTRIBUTES.VERSION` under `METADATA_I2S` is the I2S version packed as `major << 8 \| minor` (D27) | `doing` (pull request #8, stacked on #7) |
+| TE-2 | tile encodings 4 and 5 are `TILE_ENCODING_UASTC` and `TILE_ENCODING_XUASTC`, bare GPU block-compressed streams | `doing` (pull request #9, stacked on #8); TE-2.5 `blocked` on OD-T3, TE-2.6 on OD-T4 |
 | CI-1 | every CI job on a pinned Blacksmith runner | `done`; VERIFY and the macOS gating owed |
 | VL-1 | the validation layer's diagnostic sink is safe under a multithreaded writer | `todo` (P1, latent) |
 | RB-4 to RB-9 | the recovery census grows its solver, tile streams, report, apply and calibration | `todo`; RB-5 to RB-7 wait on OD-R1, OD-R3, OD-R4, OD-R5 defaults |
@@ -182,6 +184,38 @@ unchanged. Specification: `spec/ife_fields.json` (VERSION),
 - [x] IV-1.1 **Red first.** `tests/generator/test_attributes_version.py` (ctest `ife_generator_attributes_version`) requires the packing as a "shall" in the schema and the narrative, with the unpacking and both examples, in the emitted tables, and off the wire: 25 of 26, the new test failing with 14 FAIL lines. `ife_builder_layered_tests` round-trips `METADATA_I2S` at VERSION 0x0001 and reads back both halves; it records behaviour the Builder already had and was green. [d9acd91](https://github.com/Aptix-Bio/Iris-File-Extension/commit/d9acd91b5ab6b727728521cf24500ba05fd4661d)
 - [x] IV-1.2 **Green.** The VERSION and `METADATA_I2S` descriptions, the 1.1 revision summary and the ife-attributes clause state the rule; ctest 26 of 26 (Release); `--validate`, `--check` (no drift, witness not stale, so no refresh), both lints and `spec/build_document.sh` pass, and the rendered clause shows `major << 8 | minor`. [86ffcea](https://github.com/Aptix-Bio/Iris-File-Extension/commit/86ffceaa8f466e5dffe168629baedf4df3506ccb)
 - [ ] IV-1.3 **VERIFY:** the maintainer reviews the ife-attributes clause.
+
+## TE-2 — Tile encodings 4 and 5 are `TILE_ENCODING_UASTC` and `TILE_ENCODING_XUASTC` `doing`
+
+Decided 2026-11-25 (D28): two GPU block-compressed tile encodings follow
+`TILE_ENCODING_AV1` in the 1.1 group, so a reader can transcode a tile to the
+block format its GPU samples (ASTC 4x4 or BC7) instead of decoding it to
+pixels. Each tile byte-stream is a bare codec stream with no KTX2 or other
+container: under `TILE_ENCODING_UASTC` (4), one Zstandard frame (RFC 8878
+§3.1.1) of the tile's 16-byte UASTC LDR 4x4 blocks in raster order; under
+`TILE_ENCODING_XUASTC` (5), one XUASTC LDR bitstream (XUASTC LDR
+Specification v1.0, stream version 1). One plane each; the mip levels are
+set once for the slide (D29, TE-2.4). The sources are cited in D28 and D29,
+read 2026-11-25. Specification:
+`spec/ife_constants.json` and `spec/ife_spec.adoc`, UASTC Tile Byte-Streams,
+XUASTC Tile Byte-Streams, Mip Levels of Block-Compressed Tiles. Encoding and
+decoding are Iris-Slide's; the encoder's size parity with JPEG is an
+Iris-Slide requirement. [Wire_09, Wire_10, Wire_11, Wire_12]
+
+- [x] TE-2.1 **Red first.** The round-trip test loops over AV1, UASTC and XUASTC and the conformance test accepts both new members; the build fails with "no member named 'TILE_ENCODING_UASTC' in 'Iris::File::constants::TileEncodings'" (`ife_blocks_tests.cpp:1240`, `:1241`). [f91d5a4](https://github.com/Aptix-Bio/Iris-File-Extension/commit/f91d5a493b9a1230d805ea3b2c64b8440bcdd68c)
+- [x] TE-2.2 **Green.** Both members are defined in the JSON's 1.1 group and in the specification text; the witness is refreshed with `tools/refresh_witness.py` (an addition); the generated sources and documents are rebuilt; the Builder's `append_tile` comment names both. ctest 26 of 26 (Debug) and 26 of 26 under ASan and UBSan; `--validate`, `--check`, determinism under two seeds, both lints and `spec/build_document.sh` pass. [fa7259a](https://github.com/Aptix-Bio/Iris-File-Extension/commit/fa7259ace7ed71b1a12fe4a758a9143007a38380)
+- [ ] TE-2.3 **VERIFY:** the maintainer reviews the UASTC, XUASTC and mip-level clauses of the specification.
+- **TE-2.4** — a fixed number of mip levels per slide, recorded once in
+  `TILE_TABLE.MIP_LEVELS` instead of per-tile fields in the tile frame
+  (decided 2026-11-25, D29, resolving OD-T2). UASTC levels sit back to back,
+  finest first, in the one Zstandard frame, each offset computed; XUASTC
+  stays at one level, since its bitstream records no total length. [Wire_10]
+  - [x] TE-2.4.1 **Red first.** `ife_builder_layered_tests` (k) writes a UASTC slide with `MIP_LEVELS` 3 through the Builder and reads 3 through the Parser, and refuses 8 levels of a 256-pixel tile, 7 of a 128-pixel one and 2 under XUASTC; `ife_v1_oracle_tests` requires the field absent under 1.0. The build fails with "no member named 'mip_levels' in 'Iris::File::blocks::TILE_TABLE'" (`ife_v1_oracle_tests.cpp:164`) and "field designator 'MIP_LEVELS' does not refer to any field in type 'b::TileTableCreateInfo'" (`ife_builder_layered_tests.cpp:166`). [c668411](https://github.com/Aptix-Bio/Iris-File-Extension/commit/c66841146ad52f68cd980acc94b14d93ee42824d)
+  - [x] TE-2.4.2 **Green.** `MIP_LEVELS` (u16) appended to the TILE_TABLE 1.1 group, the UASTC, XUASTC and Mip Levels clauses rewritten, the witness refreshed with `tools/refresh_witness.py` (one addition), `Abstraction::TileTable::mipLevels` added, and `validate_file_structure` and the Parser refuse an unsupported count as `CONFORMANCE`. The hosted 1.1 fixtures' 46-byte TILE_TABLE no longer matches the 1.1 layout (`ife_recovery_tests` failed on both, 10 checks), so `v1_1_witness` (834 B) and `cipher_iris` (844 B) are regenerated with `ife_corpus_writer_11` and re-pinned. ctest 26 of 26 (Debug, Release, and ASan with UBSan) against them; `--validate`, `--check`, determinism under two seeds, `-d`, deprecation, both lints, the review-configuration check and `spec/build_document.sh` pass. [e5592f2](https://github.com/Aptix-Bio/Iris-File-Extension/commit/e5592f2eb84e77668a8371f5f47d9275f7758a71)
+  - [x] TE-2.4.3 **The regenerated 1.1 fixtures are hosted.** The corpus moved to `examples.iris.aptix.bio` (decided 2026-11-25, D16 amended): all four fixtures uploaded under `spec-validation/`, the two unchanged ones copied from the old host, each checked against its manifest size and SHA-256 through `fetch_corpus.py`'s own user agent; the manifest and every mention of the old host repointed. [fe1d41f](https://github.com/Aptix-Bio/Iris-File-Extension/commit/fe1d41fc112d66eac3e61f834bcffb89ca392894)
+  - [x] TE-2.4.4 **Review fixes.** `mip_levels` and `mip_levels_error` name their parameter `table` instead of the reserved `__table`; the tile edge is resolved once, by `tile_length`, whose default is `Abstraction::TileTable`'s, and `mip_levels_error` takes the resolved length, so `IFE_Runtime.cpp` no longer states 256 a second time (`DEFAULT_TILE_LENGTH` removed). Evidence: ctest 26 of 26 (Release, AppleClang) and 26 of 26 under ASan and UBSan; `--validate`, `--check` and both lints pass. [87f7a8a](https://github.com/Aptix-Bio/Iris-File-Extension/commit/87f7a8a7eae8282aa53ac7182e31990ede5f8b29)
+- [ ] TE-2.5 **XUASTC's block footprint and bitstream stability.** `blocked` on OD-T3. The specification takes the footprint from the bitstream and marks both open.
+- [ ] TE-2.6 **How an XUASTC tile carries levels beyond level 0.** `blocked` on OD-T4. `MIP_LEVELS` is 0 or 1 under XUASTC until it is decided.
 
 ## VL-1 — The validation layer's diagnostic sink under a multithreaded writer `todo` (P1, latent)
 

@@ -689,6 +689,12 @@
             "u16",
             2,
             44
+          ],
+          [
+            "MIP_LEVELS",
+            "u16",
+            2,
+            46
           ]
         ]
       },
@@ -1014,7 +1020,9 @@
         "TILE_ENCODING_AV1": 3,
         "TILE_ENCODING_IRIS": 1,
         "TILE_ENCODING_JPEG": 2,
-        "TILE_ENCODING_UNDEFINED": 0
+        "TILE_ENCODING_UASTC": 4,
+        "TILE_ENCODING_UNDEFINED": 0,
+        "TILE_ENCODING_XUASTC": 5
       },
       "underlying_type": "u8"
     }

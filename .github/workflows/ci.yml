@@ -112,7 +112,7 @@ jobs:
           - {os: blacksmith-2vcpu-windows-2025, jobs: 2, compiler: MSVC}
     steps:
       - uses: actions/checkout@v7
-      # .deps/corpus is fetched from iris.exampleslides.org at configure (see
+      # .deps/corpus is fetched from examples.iris.aptix.bio at configure (see
       # tools/fetch_corpus.py); cache it by manifest digest so a fresh runner
       # never touches the external host — the fetch script's own guarantee.
       - uses: actions/cache@v6

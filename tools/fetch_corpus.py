@@ -3,7 +3,7 @@
 
 The manifest (tests/corpus/manifest.json) is the committed source of truth:
 URL, byte size, digest, IFE version, and the block types each fixture covers.
-The files themselves live on iris.exampleslides.org (Cloudflare R2) and are
+The files themselves live on examples.iris.aptix.bio (Cloudflare R2) and are
 never committed — see tests/corpus/README.md.
 
 Behaviour, by design:

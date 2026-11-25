@@ -382,8 +382,12 @@ public:
      * Z-stacked one). Returns the stream's offset — the anchor the tile
      * offsets entry names; a frame, when written, sits just before it. Under
      * TILE_ENCODING_AV1, @p data is a bare AV1 sequence in the Low Overhead
-     * Bitstream Format with one shown frame per plane; the Builder stores the
-     * bytes without parsing them.
+     * Bitstream Format with one shown frame per plane; under
+     * TILE_ENCODING_UASTC it is one Zstandard frame of UASTC LDR 4x4 blocks
+     * holding the slide's TILE_TABLE.MIP_LEVELS levels back to back, finest
+     * first, and under TILE_ENCODING_XUASTC one XUASTC LDR bitstream at full
+     * resolution; each carries one plane. The Builder stores the bytes
+     * without parsing them.
      *
      * @throws std::logic_error before `set_tile_table` or after `finalize`,
      *         or if the tile was already appended; std::out_of_range for a bad
@@ -527,6 +531,13 @@ struct IFE_EXPORT TileTable {
     /// Edge length in pixels of this slide's square tiles; 256 unless the file
     /// says otherwise, including for every file written before 1.1.
     uint16_t tileLength = 256;
+    /// Mip levels every tile byte-stream carries, level 0 (full resolution)
+    /// first; level n is `tileLength >> n` pixels square. Always at least
+    /// one: TILE_TABLE.MIP_LEVELS is read under TILE_ENCODING_UASTC and
+    /// TILE_ENCODING_XUASTC only (zero and absence read as one), and every
+    /// other encoding carries level 0 alone (spec, Mip Levels of
+    /// Block-Compressed Tiles; decided 2026-11-25).
+    uint16_t mipLevels = 1;
 };
 
 /// Abstraction of non-tile and named associated images within the slide file.

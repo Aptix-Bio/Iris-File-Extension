@@ -17,7 +17,7 @@
  * through the new reader, and compared against the values that went in.
  *
  * The bytes come from the snapshot: a whole slide the shipped encoder wrote,
- * hosted on iris.exampleslides.org, pinned by SHA-256 in
+ * hosted on examples.iris.aptix.bio, pinned by SHA-256 in
  * tests/corpus/manifest.json and fetched into .deps/corpus/ at configure
  * time. Nothing here writes a byte. The retired hand-written
  * layer that produced the snapshot is gone; the snapshot is what outlived it.
@@ -159,6 +159,9 @@ void test_v1_bytes_read_through_generated_layer(const std::vector<BYTE>& f,
     // Nothing reports an error. That is why the version comes from the file,
     // and why nothing else in this test hangs off `newest`.
     IFE_CHECK(root.tile_table_offset().tile_length() == std::nullopt);
+    // MIP_LEVELS (1.1, decided 2026-11-25) is absent the same way: a 1.0 file
+    // carries level 0 alone.
+    IFE_CHECK(root.tile_table_offset().mip_levels() == std::nullopt);
     IFE_CHECK(newest.tile_table_offset().tile_length() != std::nullopt);
     IFE_CHECK(newest.tile_table_offset().tile_length().value() ==
               static_cast<std::uint16_t>(EXTENTS_AT));

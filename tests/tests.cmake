@@ -105,7 +105,7 @@ if(IFE_BUILD_TESTS)
     add_test(NAME ife_window_tests COMMAND ife_window_tests)
 
     # The corpus: hosted fixtures pinned by digest in tests/corpus/manifest.json
-    # (iris.exampleslides.org; never committed -- see tests/corpus/README.md).
+    # (examples.iris.aptix.bio; never committed -- see tests/corpus/README.md).
     # Fetched at configure into the gitignored .deps/corpus/ so every test that
     # reads v1-written bytes has them before any binary runs. Unconditional
     # within test builds: the oracle and the >4 GiB test depend on the

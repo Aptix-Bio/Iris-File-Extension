@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <set>
 #include <source_location>
@@ -438,6 +439,61 @@ std::string walk_annotation_groups(const b::ANNOTATION_GROUP_SIZES& __sizes,
     return {};
 }
 
+/// The tile edge in pixels: TILE_TABLE.TILE_LENGTH, or, where it is zero or
+/// absent (every file written under 1.0), the default the public
+/// Abstraction::TileTable states, so the default is written in one place
+/// (spec, Tile Length).
+std::uint16_t tile_length(const b::TILE_TABLE& table) {
+    static const std::uint16_t default_length = Abstraction::TileTable{}.tileLength;
+    const std::uint16_t stored = table.tile_length().value_or(0);
+    return stored != 0 ? stored : default_length;
+}
+/// The edge of one UASTC LDR 4x4 block: no mip level may be smaller.
+constexpr std::uint16_t UASTC_BLOCK_EDGE = 4;
+
+/// The number of mip levels every tile byte-stream of the slide carries, at
+/// least one (spec, Mip Levels of Block-Compressed Tiles; decided 2026-11-25).
+/// TILE_TABLE.MIP_LEVELS is read under the block-compressed encodings alone,
+/// where zero and absence both mean level 0 alone; under every other
+/// encoding the field carries no meaning and is not read. The switch has no
+/// `default:`, so a new encoding fails -Wswitch here until it is placed.
+std::uint16_t mip_levels(const b::TILE_TABLE& table) noexcept {
+    switch (table.encoding()) {
+        case k::TileEncodings::TILE_ENCODING_UASTC:
+        case k::TileEncodings::TILE_ENCODING_XUASTC:
+            return std::max<std::uint16_t>(table.mip_levels().value_or(0), 1);
+        case k::TileEncodings::TILE_ENCODING_UNDEFINED:
+        case k::TileEncodings::TILE_ENCODING_IRIS:
+        case k::TileEncodings::TILE_ENCODING_JPEG:
+        case k::TileEncodings::TILE_ENCODING_AV1:
+            return 1;
+    }
+    return 1;   // an undeclared ENCODING, which the conformance layer refuses
+}
+
+/// Why the tile table's mip-level count cannot be read, or an empty string.
+/// Under TILE_ENCODING_UASTC the coarsest level, TILE_LENGTH >> (levels - 1)
+/// pixels, is at least one block; under TILE_ENCODING_XUASTC there is one
+/// level, because an XUASTC LDR bitstream records no total length by which
+/// concatenated levels could be split.
+///
+/// Preconditions: the tile table validated; `length` is its tile_length().
+std::string mip_levels_error(const b::TILE_TABLE& table, std::uint16_t length) {
+    const std::uint16_t levels = mip_levels(table);
+    if (levels == 1) return {};
+    const std::string named = "TILE_TABLE.MIP_LEVELS " + std::to_string(levels);
+    if (table.encoding() == k::TileEncodings::TILE_ENCODING_XUASTC)
+        return named + " under TILE_ENCODING_XUASTC, which carries level 0 alone";
+    // A u16 edge shifted by its own width or more is zero, below any block.
+    const unsigned coarsest = levels - 1u;
+    if (coarsest >= std::numeric_limits<std::uint16_t>::digits ||
+        (length >> coarsest) < UASTC_BLOCK_EDGE)
+        return named + " makes the coarsest level of a " + std::to_string(length) +
+               "-pixel tile smaller than one " + std::to_string(UASTC_BLOCK_EDGE) +
+               "-pixel UASTC block";
+    return {};
+}
+
 /// validate_file_structure's view of the annotation groups. validate_deep has
 /// already vouched for every block it reaches, so a slot that does not validate
 /// here is an absent one.
@@ -476,6 +532,9 @@ Result IFE_EXPORT validate_file_structure(const FileAccessInfo& __info) noexcept
         const std::string tiles = walk_tile_entries(header, __info.file_size,
                                                     [](std::uint32_t, std::uint64_t, Offset, std::uint32_t) {});
         if (!tiles.empty()) return failure(FileError::BAD_TILE_ENTRY, tiles);
+        const auto table = header.tile_table_offset();
+        if (const std::string mips = mip_levels_error(table, tile_length(table)); !mips.empty())
+            return failure(FileError::CONFORMANCE, mips);
 
         const auto metadata = header.metadata_offset();
         if (!metadata) return to_result(metadata.validate());
@@ -517,8 +576,10 @@ Abstraction::File IFE_EXPORT abstract_file_structure(const FileAccessInfo& __inf
     // normalise to the default here. The abstraction states the tile length
     // there is; it does not make the caller decode the two ways the file can
     // say "256".
-    if (const auto length = table.tile_length(); length && *length != 0)
-        abstraction.tileTable.tileLength = *length;
+    abstraction.tileTable.tileLength = tile_length(table);
+    if (const std::string mips = mip_levels_error(table, abstraction.tileTable.tileLength); !mips.empty())
+        throw std::runtime_error(mips);
+    abstraction.tileTable.mipLevels = mip_levels(table);
 
     const auto extents = table.layer_extents_offset();
     if (!extents) fail(extents.validate());

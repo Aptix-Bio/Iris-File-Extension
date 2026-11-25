@@ -92,8 +92,8 @@ off it. A `corpus_AV1` would differ from a `corpus_JPEG` by one enum byte in
 a repository whose scope excludes compression. Real AV1 bytes are Iris-Slide's
 evidence, not this layer's.
 
-Files are **hosted, not committed**: `iris.exampleslides.org` (Cloudflare R2)
-serves them, `manifest.json` pins each by SHA-256, and CMake fetches into the
+Files are **hosted, not committed**: `examples.iris.aptix.bio` (Cloudflare R2, Aptix,
+since 2026-11-25; `iris.exampleslides.org` before) serves them, `manifest.json` pins each by SHA-256, and CMake fetches into the
 gitignored `.deps/corpus/` at configure time. The digest is what makes a hosted
 corpus reproducible.
 
@@ -161,8 +161,14 @@ Reading the same fields on the 1.0 witness returns **absent** for every one of
 them, which is the version gate working on real bytes rather than on the
 synthetic 200.0 fixture.
 
-Still uncovered: tile encodings other than JPEG, and `clinical_encodings`
-values beyond `CLINICAL_HL7_V2`.
+Still uncovered: tile encodings other than JPEG, `clinical_encodings`
+values beyond `CLINICAL_HL7_V2`, and `TILE_TABLE.MIP_LEVELS` above zero
+(1.1, decided 2026-11-25). The field means something only under the
+block-compressed encodings, and a JPEG witness writes zero, so a nonzero
+count is pinned in memory by `ife_builder_layered_tests` instead. Appending
+it to the draft 1.1 group lengthened TILE_TABLE from 46 to 48 bytes, so
+both 1.1 fixtures were regenerated with `ife_corpus_writer_11` (834 and 844
+bytes) and re-pinned.
 
 Two things need no fixture. Slides over 4 GiB are covered by
 `ife_large_file_tests` (a 4.00 GiB sparse file, 28 KiB actually allocated), and

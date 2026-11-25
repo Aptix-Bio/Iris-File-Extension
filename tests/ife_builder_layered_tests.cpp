@@ -31,6 +31,11 @@
  *     its encoding; a second stream, an undefined encoding, an empty stream,
  *     a METADATA naming another offset, and a stream after METADATA are each
  *     refused by name and write nothing.
+ *   - Mip levels (decided 2026-11-25): TILE_TABLE.MIP_LEVELS records one
+ *     count for the slide; a UASTC slide written with 3 reads back 3, 0 and 1
+ *     read back as level 0 alone, a count whose coarsest level is under 4
+ *     pixels is refused naming it, XUASTC is refused above one level, and
+ *     the field is ignored under every other encoding.
  *
  * Self-contained (no framework). Non-zero exit on failure.
  */
@@ -133,8 +138,10 @@ struct Placed { Offset table, metadata, icc, images, attributes; };
 
 /// Compose the tile table from the Builder's placements: the tile offsets,
 /// the layer extents, then the TILE_TABLE block naming both. Returns the
-/// TILE_TABLE's offset.
-Offset write_tile_table(const Builder& builder, const BuilderTileTableInfo& grid) {
+/// TILE_TABLE's offset. `mip_levels` is TILE_TABLE.MIP_LEVELS, the slide's one
+/// mip-level count (0 writes the default, level 0 alone).
+Offset write_tile_table(const Builder& builder, const BuilderTileTableInfo& grid,
+                        uint16_t mip_levels = 0) {
     const auto tiles  = builder.tile_offsets();
     // The grid is the caller's; normalise the plane counts as set_tile_table does.
     const auto planes = grid.planes.empty()
@@ -155,7 +162,8 @@ Offset write_tile_table(const Builder& builder, const BuilderTileTableInfo& grid
         .LAYER_EXTENTS_OFFSET = extents_at,
         .X_EXTENT             = grid.extent.width,
         .Y_EXTENT             = grid.extent.height,
-        .TILE_LENGTH          = grid.tileLength});
+        .TILE_LENGTH          = grid.tileLength,
+        .MIP_LEVELS           = mip_levels});
 }
 
 /// Place everything after the tiles and seal. `metadata_first` reserves the
@@ -632,6 +640,76 @@ int main() {
         IFE_CHECK(file.clinicalSize == fhir.size() && file.clinicalOffset <= at.file_size &&
                   at.file_size - file.clinicalOffset >= fhir.size() &&
                   std::memcmp(at.file_ptr + file.clinicalOffset, json, fhir.size()) == 0);
+    }
+
+    // ---- (k) mip levels: one count for the whole slide -------------------- //
+    // Decided 2026-11-25 (OD-T2): the slide records its mip-level count once,
+    // in TILE_TABLE.MIP_LEVELS, instead of in each tile's frame, so no tile
+    // pays for a level directory. A TILE_ENCODING_UASTC stream holds its
+    // levels back to back, finest first, in its one Zstandard frame, and a
+    // reader computes each level's offset from TILE_LENGTH and the count. The
+    // stream bytes stay opaque here (CLAUDE.md, "Tile stream contents are not
+    // this library's business"): the tiles stand in for three-level streams.
+    {
+        constexpr auto UASTC  = static_cast<Encoding>(k::TileEncodings::TILE_ENCODING_UASTC);
+        constexpr auto XUASTC = static_cast<Encoding>(k::TileEncodings::TILE_ENCODING_XUASTC);
+        // A whole file: the five tiles, the tile table declaring `levels`, and
+        // METADATA. The Builder owns the bytes, so it is returned whole.
+        const auto write_slide = [](Encoding encoding, uint16_t tile_length, uint16_t levels) {
+            BuilderTileTableInfo grid = two_layers();
+            grid.encoding   = encoding;
+            grid.tileLength = tile_length;
+            const Builder builder = Builder::create({.capacity = 1ULL << 20});
+            builder.set_tile_table(grid);
+            append_all(builder, 2);
+            const Offset table_at    = write_tile_table(builder, grid, levels);
+            const Offset metadata_at = builder->append(b::MetadataCreateInfo{.MICRONS_PIXEL = 0.25f});
+            builder.finalize({.tileTable = table_at, .metadata = metadata_at});
+            return builder;
+        };
+        const auto access = [](const Builder& builder) {
+            return FileAccessInfo{builder->base(), builder.head()};
+        };
+
+        // Three levels of a 256-pixel UASTC tile: 256, 128 and 64 pixels.
+        const Builder three = write_slide(UASTC, 256, 3);
+        IFE_CHECK(validate_file_structure(access(three)).succeeded());
+        const Parser parser(access(three));
+        IFE_CHECK(parser.abstraction().tileTable.mipLevels == 3);
+        check_tiles(access(three), parser.abstraction());
+
+        // Zero and one both mean level 0 alone, as Z_PLANES does for planes.
+        for (const uint16_t levels : {uint16_t{0}, uint16_t{1}})
+            IFE_CHECK(Parser(access(write_slide(UASTC, 256, levels))).abstraction()
+                          .tileTable.mipLevels == 1);
+
+        // The coarsest level may be one 4x4 block and no smaller: a 256-pixel
+        // tile holds seven levels (256 down to 4 pixels), not eight (2 pixels).
+        IFE_CHECK(validate_file_structure(access(write_slide(UASTC, 256, 7))).succeeded());
+        const Builder eight = write_slide(UASTC, 256, 8);
+        const Result too_many = validate_file_structure(access(eight));
+        IFE_CHECK(!too_many.succeeded());
+        IFE_CHECK(too_many.code_as<FileError>() == FileError::CONFORMANCE);
+        IFE_CHECK(too_many.message.find("MIP_LEVELS 8") != std::string::npos);
+        IFE_CHECK(throws_naming<std::runtime_error>([&] {
+            (void)Parser(access(eight)).abstraction(); }, "MIP_LEVELS 8"));
+        // The same bound scales with the tile: a 128-pixel tile holds six.
+        IFE_CHECK(validate_file_structure(access(write_slide(UASTC, 128, 6))).succeeded());
+        IFE_CHECK(!validate_file_structure(access(write_slide(UASTC, 128, 7))).succeeded());
+
+        // An XUASTC LDR bitstream records no total length, so concatenated
+        // levels cannot be split: XUASTC carries level 0 alone.
+        IFE_CHECK(validate_file_structure(access(write_slide(XUASTC, 256, 1))).succeeded());
+        const Result xuastc = validate_file_structure(access(write_slide(XUASTC, 256, 2)));
+        IFE_CHECK(!xuastc.succeeded());
+        IFE_CHECK(xuastc.code_as<FileError>() == FileError::CONFORMANCE);
+        IFE_CHECK(xuastc.message.find("TILE_ENCODING_XUASTC") != std::string::npos);
+
+        // Under every other encoding the field means nothing: a reader reads
+        // one level whatever it holds.
+        const Builder jpeg = write_slide(TILE_ENCODING_JPEG, 256, 3);
+        IFE_CHECK(validate_file_structure(access(jpeg)).succeeded());
+        IFE_CHECK(Parser(access(jpeg)).abstraction().tileTable.mipLevels == 1);
     }
 
     if (g_failures == 0) std::printf("ife_builder_layered_tests: PASS\n");

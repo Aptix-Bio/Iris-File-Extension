@@ -2,7 +2,7 @@
 #
 # Hosted fixtures pinned by SHA-256 in manifest.json, fetched with the SAME
 # script CMake runs (//:tools/fetch_corpus.py). local = 1: the rule downloads
-# from iris.exampleslides.org, so it must not run inside the
+# from examples.iris.aptix.bio, so it must not run inside the
 # network-restricting sandbox; Bazel's action cache still makes repeat
 # builds a no-op, and the script's own digest cache verifies every byte.
 load("//:python_resolve.bzl", "PYTHON_RESOLVE")
