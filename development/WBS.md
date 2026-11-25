@@ -63,7 +63,7 @@ touch different files from the recovery lane and can run beside it.
 | Package | Purpose | Status |
 |---|---|---|
 | CI-3 | the review bot reviews every pull request; the plan moves to `development/` | `doing` (pull request #6) |
-| TE-1 | tile encoding value 3 is `TILE_ENCODING_AV1`, a bare AV1 sequence, in place of AVIF | `doing` (pull request #6); TE-1.4 `blocked` on OD-T1 |
+| TE-1 | tile encoding value 3 is `TILE_ENCODING_AV1`, a bare AV1 sequence, in place of AVIF | `doing` (pull request #7, stacked on #6); TE-1.4 `blocked` on OD-T1 |
 | CI-1 | every CI job on a pinned Blacksmith runner | `done`; VERIFY and the macOS gating owed |
 | VL-1 | the validation layer's diagnostic sink is safe under a multithreaded writer | `todo` (P1, latent) |
 | RB-4 to RB-9 | the recovery census grows its solver, tile streams, report, apply and calibration | `todo`; RB-5 to RB-7 wait on OD-R1, OD-R3, OD-R4, OD-R5 defaults |
@@ -163,6 +163,7 @@ Byte-Streams. [Wire_06, Wire_07]
 - [x] TE-1.1 **Red first.** The round-trip and conformance tests name `TILE_ENCODING_AV1`; the build fails with "no member named 'TILE_ENCODING_AV1' in 'Iris::File::constants::TileEncodings'" (`ife_blocks_tests.cpp:1243`, `ife_validation_tests.cpp:157`). [50230d5](https://github.com/Aptix-Bio/Iris-File-Extension/commit/50230d55f58aa35445189b4711b540f7c04ba55c)
 - [x] TE-1.2 **Green.** The member is renamed and defined in the JSON and the specification text; the witness key is renamed by hand (the refresh tool refuses a break) and `tests/wire/README.md` records the break; the generated sources and documents are rebuilt; the example takes the name from the generated `member_name`. ctest 25 of 25 (Release) and 25 of 25 under ASan and UBSan; `--validate`, `--check`, both lints and `spec/build_document.sh` pass. [abd8082](https://github.com/Aptix-Bio/Iris-File-Extension/commit/abd80828ca6cfe2992fa7ed797e4918feadd622d)
 - [ ] TE-1.3 **VERIFY:** the maintainer reviews the AV1 clause of the specification.
+- [ ] TE-1.5 **The exception is recorded.** Value 3 is a member of the ratified 1.0 group, so its reassignment breaks append-only; the code owner sanctions it (2026-11-25) because IFE has no deployed corpus. `tests/wire/README.md`, D26, the 1.1 revision summary and CONTRIBUTING.md's absolutes record it; `tools/refresh_witness.py` has no path that records a break, so the witness key stays renamed by hand.
 - [ ] TE-1.4 **Which plane is the key (in-focus) frame, and the mapping of decode order to focal depth.** `blocked` on OD-T1 (ARCHITECTURE.md §1.1). No key-plane field and no frame-to-depth ordering rule is added until it is decided; the specification marks both open.
 
 ## VL-1 — The validation layer's diagnostic sink under a multithreaded writer `todo` (P1, latent)

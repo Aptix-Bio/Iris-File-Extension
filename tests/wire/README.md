@@ -30,12 +30,19 @@ refresh lands — the refresh is part of the change that grows the spec.
 One caveat: this baseline records today's tree, which already contains the
 deliberate 1.0 `ATTRIBUTE_SIZE` correction — KIND added, entry six to seven
 bytes, commit `9e591fa5e9e71274cde3de5415fa55df6c82f033` — so the gate starts
-from a state whose history includes the one break of the append-only
+from a state whose history includes the first break of the append-only
 invariant, and must not be read as proof it has held unbroken.
 
-A second deliberate break, decided 2026-11-25: `tile_encodings` value 3 was
-renamed from `TILE_ENCODING_AVIF` to `TILE_ENCODING_AV1` and given a new
-meaning (a bare AV1 Low Overhead Bitstream Format sequence) in place of being
-deprecated, because no file in use carries the AVIF tile encoding. The
-refresh tool refuses a break, so the one witness key was renamed by hand in
-the same change; the value, 3, is unchanged.
+A second deliberate break, decided 2026-11-25 (D26): `tile_encodings` value 3,
+a member of the ratified 1.0 group, was renamed from `TILE_ENCODING_AVIF` to
+`TILE_ENCODING_AV1` and given a new meaning (a bare AV1 Low Overhead Bitstream
+Format sequence) in place of being deprecated beside a new value. It is a
+reviewed wire correction that the code owner sanctioned on 2026-11-25 as an
+exception to append-only (D2) and to the review rubric's SpecLedger item,
+because no file carrying the AVIF tile encoding exists to break: IFE has no
+deployed corpus of slides, and the hosted conformance fixtures carry
+`TILE_ENCODING_JPEG` and `TILE_ENCODING_IRIS` tiles only. A future rename of a
+shipped fact needs the same: a code-owner decision recorded here. The refresh
+tool has no path that records a break, by design, so the one witness key was
+renamed by hand in the same change; the value, 3, is unchanged, and
+`--validate` passes against it.
