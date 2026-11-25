@@ -50,6 +50,7 @@ flowchart LR
     R3["R-3 release 1.1"] --> R4["R-4 Python bindings"]
     R4 --> R5["R-5 JS/WASM bindings"]
     R3 --> RC5["RC-5 checksum footer<br/>1.2 material"]
+    TE1["TE-1 tile encoding 3 is AV1<br/>doing"] --> OD["OD-T1 key plane,<br/>decode order to depth"]
     VL1["VL-1 parallel diagnostic log"]
     ZC["ZC-1..5 span read path"]
     BL["BL-1..7 backlog"]
@@ -62,6 +63,7 @@ touch different files from the recovery lane and can run beside it.
 | Package | Purpose | Status |
 |---|---|---|
 | CI-3 | the review bot reviews every pull request; the plan moves to `development/` | `doing` (pull request #6) |
+| TE-1 | tile encoding value 3 is `TILE_ENCODING_AV1`, a bare AV1 sequence, in place of AVIF | `doing` (pull request #6); TE-1.4 `blocked` on OD-T1 |
 | CI-1 | every CI job on a pinned Blacksmith runner | `done`; VERIFY and the macOS gating owed |
 | VL-1 | the validation layer's diagnostic sink is safe under a multithreaded writer | `todo` (P1, latent) |
 | RB-4 to RB-9 | the recovery census grows its solver, tile streams, report, apply and calibration | `todo`; RB-5 to RB-7 wait on OD-R1, OD-R3, OD-R4, OD-R5 defaults |
@@ -146,6 +148,23 @@ The job now cross-compiles with `g++-s390x-linux-gnu` and runs every test under
       line now adds `nasm` and `pkg-config`, the tools Iris-Slide's own
       `_build.yml` installs.
 
+## TE-1 — Tile encoding value 3 is `TILE_ENCODING_AV1` `doing`
+
+Decided 2026-11-25 (D26): the AVIF tile encoding is removed and value 3 of
+`tile_encodings` becomes `TILE_ENCODING_AV1`. The tile byte-stream is a bare
+AV1 sequence in the Low Overhead Bitstream Format (AV1 specification §5.2,
+https://aomediacodec.github.io/av1-spec/, read 2026-11-25), with no container:
+one shown frame per focal plane, and a single-plane tile is one key frame. No
+file in use carries the AVIF tile encoding, so the value is reassigned in
+place instead of deprecated. `IMAGE_ENCODING_AVIF` (associated images) stays.
+Specification: `spec/ife_constants.json` and `spec/ife_spec.adoc`, AV1 Tile
+Byte-Streams. [Wire_06, Wire_07]
+
+- [x] TE-1.1 **Red first.** The round-trip and conformance tests name `TILE_ENCODING_AV1`; the build fails with "no member named 'TILE_ENCODING_AV1' in 'Iris::File::constants::TileEncodings'" (`ife_blocks_tests.cpp:1243`, `ife_validation_tests.cpp:157`). [50230d5](https://github.com/Aptix-Bio/Iris-File-Extension/commit/50230d55f58aa35445189b4711b540f7c04ba55c)
+- [ ] TE-1.2 **Green.** The member is renamed and defined in the JSON and the specification text; the witness key is renamed by hand (the refresh tool refuses a break) and `tests/wire/README.md` records the break; the generated sources and documents are rebuilt; the example takes the name from the generated `member_name`.
+- [ ] TE-1.3 **VERIFY:** the maintainer reviews the AV1 clause of the specification.
+- [ ] TE-1.4 **Which plane is the key (in-focus) frame, and the mapping of decode order to focal depth.** `blocked` on OD-T1 (ARCHITECTURE.md §1.1). No key-plane field and no frame-to-depth ordering rule is added until it is decided; the specification marks both open.
+
 ## VL-1 — The validation layer's diagnostic sink under a multithreaded writer `todo` (P1, latent)
 
 `ValidationHooks::diagnostic` is a caller-owned `std::string*` attached once at
@@ -201,7 +220,7 @@ engine's refinements and where each lives now:
 
 - [ ] **RB-0.d — False anchors on real tiles.** RB-0 (d) measured false-anchor
   rates on proxy JPEG tiles of synthetic tissue; the same measurement on a real
-  slide's JPEG and AVIF tiles is still owed.
+  slide's JPEG and AV1 tiles is still owed.
 - [ ] **OD-R1, OD-R3, OD-R4, OD-R5 — decisions owed** (ARCHITECTURE.md §1.1).
   Work proceeds on the defaults; RB-5 to RB-7 change if the maintainer chooses
   otherwise.
@@ -412,8 +431,11 @@ Collected from the retired documents' "not blocking" and "deferred" notes.
   whether that closes this item is *(to confirm)*.
 - [ ] **BL-3 — ThreadSanitizer and fuzzing.** No TSan preset or fuzz target
   exists; VL-1.6 adds the first TSan test.
-- [ ] **BL-4 — A fixture with real AVIF tile bytes.** `TILE_ENCODING_AVIF`
-  appears in no committed or hosted bytes.
+- [ ] **BL-4 — A fixture with real AV1 tile bytes.** `TILE_ENCODING_AV1` (a
+  bare Low Overhead Bitstream Format sequence, D26) appears in no committed or
+  hosted bytes: a single-plane tile as one key frame, and a Z-stacked tile
+  with one shown frame per plane. Rewritten 2026-11-25 from the AVIF fixture
+  item, when value 3 became AV1.
 - [ ] **BL-5 — The two deferred `TODO(draft)` markers** in `spec/ife_spec.adoc`:
   Equations 2.1/2.2 (MpP and Mc normalization) and Figure 2.7 (slide space).
   The prose states both rules; they want the 1.0 document's figure.

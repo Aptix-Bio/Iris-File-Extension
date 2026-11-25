@@ -1011,7 +1011,7 @@
     },
     "tile_encodings": {
       "members": {
-        "TILE_ENCODING_AVIF": 3,
+        "TILE_ENCODING_AV1": 3,
         "TILE_ENCODING_IRIS": 1,
         "TILE_ENCODING_JPEG": 2,
         "TILE_ENCODING_UNDEFINED": 0

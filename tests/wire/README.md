@@ -32,3 +32,10 @@ deliberate 1.0 `ATTRIBUTE_SIZE` correction — KIND added, entry six to seven
 bytes, commit `9e591fa5e9e71274cde3de5415fa55df6c82f033` — so the gate starts
 from a state whose history includes the one break of the append-only
 invariant, and must not be read as proof it has held unbroken.
+
+A second deliberate break, decided 2026-11-25: `tile_encodings` value 3 was
+renamed from `TILE_ENCODING_AVIF` to `TILE_ENCODING_AV1` and given a new
+meaning (a bare AV1 Low Overhead Bitstream Format sequence) in place of being
+deprecated, because no file in use carries the AVIF tile encoding. The
+refresh tool refuses a break, so the one witness key was renamed by hand in
+the same change; the value, 3, is unchanged.

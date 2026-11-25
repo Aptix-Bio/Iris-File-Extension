@@ -117,7 +117,7 @@ if (Result valid = parser.validate_file_structure(); valid.failed()) {
 }
 const Abstraction::File& slide = parser.abstraction();    // lifted once, then kept
 std::span<const BYTE> stream   = parser.tile(layer, tile); // zero-copy; empty = no tile there
-// ...decompress stream.data(), stream.size() with the JPEG/AVIF library you use
+// ...decompress stream.data(), stream.size() with the JPEG or AV1 decoder for the tile table's encoding
 ```
 `validate_file_structure` deep-validates the offset graph and bounds-checks every tile entry. `abstraction()` and `abstract_file_structure` check every block they read — both witnesses, and every length the block declares — and throw `std::runtime_error` on a structurally damaged file rather than reading it. They never return values they could not verify, and never repair; to reopen a damaged file, see [Recovering a Damaged File](#recovering-a-damaged-file). A caller that maps the file itself can bind a Parser to that mapping instead — `Parser({ptr, size})` borrows it — or call the free functions `validate_file_structure` / `abstract_file_structure` directly.
 

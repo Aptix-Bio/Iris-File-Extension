@@ -173,9 +173,9 @@
           "value": 2,
           "description": "JPEG compressed tiles."
         },
-        "TILE_ENCODING_AVIF": {
+        "TILE_ENCODING_AV1": {
           "value": 3,
-          "description": "AVIF compressed tiles."
+          "description": "AV1 compressed tiles. The tile byte-stream is a bare AV1 sequence in the Low Overhead Bitstream Format (AV1 Bitstream and Decoding Process Specification, section 5.2, https://aomediacodec.github.io/av1-spec/): OBUs only, each with obu_has_size_field equal to 1, inside no AVIF, ISOBMFF or IVF container. The stream carries one temporal unit, and so one shown frame, per focal plane; a single-plane tile is one key frame. Value 3 named AVIF compressed tiles until 2026-11-25, when it was reassigned to AV1; no file written before then is known to carry it."
         }
       }
     }

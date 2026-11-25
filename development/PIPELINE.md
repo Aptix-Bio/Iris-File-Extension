@@ -39,7 +39,8 @@ flowchart LR
    `deprecated` with `{version, reason}` (D2). A change that adds a fact
    refreshes `tests/wire/witness.json` with `tools/refresh_witness.py` in the
    same commit; `--check` fails until it does. A task that seems to need
-   breaking a shipped fact is a task written wrong.
+   breaking a shipped fact is a task written wrong; the two owner decisions
+   that broke one are recorded in `tests/wire/README.md` (the latest, D26).
 4. **Every test is registered in both build systems**, `tests/tests.cmake` and
    `tests/tests.bzl`. A defect reachable through only one build system is
    invisible; FastFHIR shipped a recovery engine Bazel was not compiling.
