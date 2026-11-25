@@ -1,6 +1,6 @@
 {
   "v1_0_witness.test_slide": {
-    "url": "https://iris.exampleslides.org/spec-validation/v1_0_witness.test_slide",
+    "url": "https://examples.iris.aptix.bio/spec-validation/v1_0_witness.test_slide",
     "size": 3151,
     "sha256": "aab8dec8fa5588ca530b6bb21241034251278af7c1f72e47a6b6e1992d5bb346",
     "version": "1.0",
@@ -28,7 +28,7 @@
     ]
   },
   "v1_1_witness.test_slide": {
-    "url": "https://iris.exampleslides.org/spec-validation/v1_1_witness.test_slide",
+    "url": "https://examples.iris.aptix.bio/spec-validation/v1_1_witness.test_slide",
     "size": 834,
     "sha256": "c4844be3d8f057feeb508da825fcef6c971a49def8b2b3afe872bc3990996bb1",
     "version": "1.1",
@@ -58,7 +58,7 @@
     ]
   },
   "cipher_iris.test_slide": {
-    "url": "https://iris.exampleslides.org/spec-validation/cipher_iris.test_slide",
+    "url": "https://examples.iris.aptix.bio/spec-validation/cipher_iris.test_slide",
     "size": 844,
     "sha256": "c65e1affec2dd4975e1e9cd5a62365a4796f42ec1fc16f54664c6ab362a2236d",
     "version": "1.1",
@@ -89,7 +89,7 @@
     ]
   },
   "v1_tile_offsets_full_width.bin": {
-    "url": "https://iris.exampleslides.org/spec-validation/v1_tile_offsets_full_width.bin",
+    "url": "https://examples.iris.aptix.bio/spec-validation/v1_tile_offsets_full_width.bin",
     "size": 32,
     "sha256": "b21ed7691f56b7ba4778f9472290b469b189a2e6c9b8145f7012f745376491aa",
     "version": "1.0",

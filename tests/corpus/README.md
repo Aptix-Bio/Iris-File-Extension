@@ -92,8 +92,8 @@ off it. A `corpus_AV1` would differ from a `corpus_JPEG` by one enum byte in
 a repository whose scope excludes compression. Real AV1 bytes are Iris-Slide's
 evidence, not this layer's.
 
-Files are **hosted, not committed**: `iris.exampleslides.org` (Cloudflare R2)
-serves them, `manifest.json` pins each by SHA-256, and CMake fetches into the
+Files are **hosted, not committed**: `examples.iris.aptix.bio` (Cloudflare R2, Aptix,
+since 2026-11-25; `iris.exampleslides.org` before) serves them, `manifest.json` pins each by SHA-256, and CMake fetches into the
 gitignored `.deps/corpus/` at configure time. The digest is what makes a hosted
 corpus reproducible.
 

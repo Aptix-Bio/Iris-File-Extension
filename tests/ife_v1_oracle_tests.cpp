@@ -17,7 +17,7 @@
  * through the new reader, and compared against the values that went in.
  *
  * The bytes come from the snapshot: a whole slide the shipped encoder wrote,
- * hosted on iris.exampleslides.org, pinned by SHA-256 in
+ * hosted on examples.iris.aptix.bio, pinned by SHA-256 in
  * tests/corpus/manifest.json and fetched into .deps/corpus/ at configure
  * time. Nothing here writes a byte. The retired hand-written
  * layer that produced the snapshot is gone; the snapshot is what outlived it.

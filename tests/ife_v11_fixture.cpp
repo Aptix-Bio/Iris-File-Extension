@@ -3,7 +3,7 @@
  * @brief Loads the 1.1 witness.
  *
  * The bytes are written by tests/ife_corpus_writer_11.cpp, hosted on
- * iris.exampleslides.org, pinned by digest in tests/corpus/manifest.json and
+ * examples.iris.aptix.bio, pinned by digest in tests/corpus/manifest.json and
  * fetched into .deps/corpus/ at configure time — the same delivery as the
  * 1.0 snapshot. The loader is plain data movement; it knows nothing of
  * either the generated or the retired layer.

@@ -3,7 +3,7 @@
  * @brief Loads the snapshot the SHIPPED encoder wrote.
  *
  * This file used to build its bytes with v1's STORE_* functions. Those bytes
- * are now permanent evidence: hosted on iris.exampleslides.org, pinned by
+ * are now permanent evidence: hosted on examples.iris.aptix.bio, pinned by
  * digest in tests/corpus/manifest.json, fetched into .deps/corpus/ at
  * configure time. The loader stays free of both layers'
  * types — nothing here includes IFE_Runtime or the retired hand-written
