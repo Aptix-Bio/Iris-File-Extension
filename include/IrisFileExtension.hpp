@@ -254,7 +254,8 @@ public:
     /// How many focal planes the tile's stream carries: 1 on a single-plane
     /// layer, 0 for a NULL_TILE entry, otherwise the count its tile frame
     /// records (every stream of a Z-stacked layer is framed; the abstraction
-    /// has already refused a file where one is not).
+    /// has already refused a file where one is not). Under TILE_ENCODING_AV1
+    /// the stream holds this many shown frames, one per plane.
     /// @throws std::out_of_range for a bad layer or tile.
     uint16_t tile_planes(uint32_t layer, uint32_t tile) const;
 
@@ -379,7 +380,10 @@ public:
      * layer); @p z_planes is the number of focal planes this stream carries (0
      * or 1 on a single-plane layer, at most the layer's `planes` on a
      * Z-stacked one). Returns the stream's offset — the anchor the tile
-     * offsets entry names; a frame, when written, sits just before it.
+     * offsets entry names; a frame, when written, sits just before it. Under
+     * TILE_ENCODING_AV1, @p data is a bare AV1 sequence in the Low Overhead
+     * Bitstream Format with one shown frame per plane; the Builder stores the
+     * bytes without parsing them.
      *
      * @throws std::logic_error before `set_tile_table` or after `finalize`,
      *         or if the tile was already appended; std::out_of_range for a bad

@@ -54,7 +54,7 @@
          << help_statement;
      return EXIT_FAILURE;
  }
- const char* PARSE_ECODING(IrisSlide::Encoding encoding);
+ std::string_view PARSE_ECODING(IrisSlide::Encoding encoding);
  const char* PARSE_FORMAT(Iris::Format format);
  const char* PARSE_IMAGE_ENCODING(IrisSlide::ImageEncoding image_encoding);
  const char* PARSE_ANNOTATION_TYPE(Iris::AnnotationTypes annotation_type);
@@ -191,14 +191,15 @@
      return EXIT_SUCCESS;
  }
  
- inline const char* PARSE_ECODING(IrisSlide::Encoding encoding)
+ // The abstraction carries Iris-Headers' Encoding, whose values are the
+ // specification's tile_encodings, so the name comes from the generated
+ // member_name: one spelling, taken from spec/ife_constants.json, instead of a
+ // hand-written copy that drifts when a member is renamed.
+ inline std::string_view PARSE_ECODING(IrisSlide::Encoding encoding)
  {
-     switch (encoding) {
-     case IrisSlide::TILE_ENCODING_UNDEFINED: return "TILE_ENCODING_UNDEFINED";
-     case IrisSlide::TILE_ENCODING_IRIS:return "TILE_ENCODING_IRIS";
-     case IrisSlide::TILE_ENCODING_JPEG:return "TILE_ENCODING_JPEG";
-     case IrisSlide::TILE_ENCODING_AVIF:return "TILE_ENCODING_AVIF";
-     } return "TILE_ENCODING_UNDEFINED";
+     const std::string_view name = Iris::File::constants::member_name(
+         static_cast<Iris::File::constants::TileEncodings>(encoding));
+     return name.empty() ? "TILE_ENCODING_UNDEFINED" : name;
  }
  inline const char* PARSE_FORMAT(Iris::Format format)
  {

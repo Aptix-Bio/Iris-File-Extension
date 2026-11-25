@@ -526,7 +526,9 @@ byte-stream per tile, not as several, and the tile's OFFSET and SIZE
   by a tile frame (<<ife-tile-frame>>), whose Z_PLANES is the number of planes
   that tile carries. A decoder *shall* read the count from the frame. The frame
   is the only place the format records it: this specification never
-  interprets a byte-stream, so it cannot defer the count to one.
+  interprets a byte-stream, so it cannot defer the count to one. How a
+  stream codes its planes is the tile encoding's; for TILE_ENCODING_AV1 it
+  is one shown frame per plane (<<ife-tile-av1>>).
 
 Z_PLANES is a per-layer maximum rather than a per-tile count for two reasons:
 focal depth is a property of the acquisition, and a pyramid is normally
@@ -632,6 +634,33 @@ offsets entry.
   the tile table.
 * The ordering *may* follow the global tile indexing scheme or *may*
   follow no indexing scheme, arranged in any order the encoder chooses.
+
+[[ife-tile-av1]]
+===== AV1 Tile Byte-Streams
+
+Where the tile table's ENCODING is TILE_ENCODING_AV1, each tile byte-stream is
+defined by the AV1 Bitstream and Decoding Process Specification
+(https://aomediacodec.github.io/av1-spec/[AV1 specification]):
+
+* The byte-stream *shall* be a bare AV1 sequence in the Low Overhead Bitstream
+  Format (AV1 specification, section 5.2): a sequence of OBUs, each with
+  obu_has_size_field equal to 1. It *shall not* be wrapped in an AVIF, ISOBMFF
+  or IVF container, and *shall not* use the length-delimited format of the AV1
+  specification's Annex B.
+* The byte-stream *shall* be decodable without the bytes of any other tile:
+  its first temporal unit carries the sequence header OBU its frames are coded
+  against.
+* The byte-stream *shall* carry one temporal unit, and so one shown frame, per
+  focal plane (<<ife-focal-planes>>); the AV1 specification allows exactly one
+  shown frame per temporal unit. Where a tile frame (<<ife-tile-frame>>)
+  precedes the stream, the number of shown frames *shall* equal the frame's
+  Z_PLANES.
+* A single-plane tile *shall* be one key frame: one temporal unit whose frame
+  has frame_type equal to KEY_FRAME and show_frame equal to 1.
+
+NOTE: This version does not specify which focal plane is coded as the key
+frame, nor how the decode order of a stream's shown frames maps to focal
+depth. Both are open as of 2026-11-25.
 
 [[ife-tile-frame]]
 ===== The Tile Frame

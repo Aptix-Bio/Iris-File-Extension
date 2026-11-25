@@ -21,8 +21,10 @@ before opening a PR.
    purpose — the gate compares against it — and is refreshed only as part of a
    reviewed wire change (see "What a wire change requires" below). A witness
    update without a corresponding spec change is a red flag. Its history is
-   not unbroken: it records the deliberate 1.0 `ATTRIBUTE_SIZE` correction,
-   the one break of the invariant (see `tests/wire/README.md`).
+   not unbroken: it records two deliberate breaks of the invariant, each a
+   code-owner decision, the 1.0 `ATTRIBUTE_SIZE` correction and the
+   reassignment of tile encoding value 3 to `TILE_ENCODING_AV1` (D26), both in
+   `tests/wire/README.md`.
 4. **The corpus is pinned, not trusted.** `tests/corpus/manifest.json` pins
    each hosted fixture by SHA-256; a re-uploaded file the manifest has not
    blessed is rejected, not silently adopted. Never touch corpus bytes without
