@@ -13,12 +13,12 @@
 #   - each job holds least privilege: the job with the model key can read and cannot write, the
 #     job that writes never sees the key;
 #   - both review jobs run only for a pull request from a branch of this repository, and a
-#     fork's pull request gets a job that states why it is skipped;
+#     fork's pull request gets a job, reading only its script, that states why it is skipped;
 #   - GOVERNANCE_READ_TOKEN reaches only the step that checks out Aptix-Bio/governance at the
 #     pinned commit, and every other action is pinned by a full commit SHA;
 #   - pull request text reaches a `run:` script only through `env:`, and every job is bounded;
-#   - every `run:` step is one command, `cmake [-D<name>=<value>]... -P base/cmake/<name>.cmake`,
-#     its logic in the script (development/ci_runners.md, "Workflows are simple; CMake does the
+#   - every `run:` step is one command, `cmake [-D<name>=<value>]... -P base/cmake/<name>.cmake`
+#     of a script that exists, its logic in the script (development/ci_runners.md, "Workflows are simple; CMake does the
 #     work"), so no shell line in the workflow can reach the model key or the write token.
 # GitHub, "Securely using pull_request_target" and "Secure use reference" (docs.github.com,
 # read 2026-11-24) give the reasons; development/WBS.md, CI-3, the sources. The `spec` job in
@@ -135,9 +135,8 @@ string(FIND "${condition}" "${fork}" at)
 if(at EQUAL -1)
     problem("job `fork-skipped` does not run on `${fork}`")
 endif()
-string(FIND "${job_fork-skipped}" "\n    permissions: {}\n" at)
-if(at EQUAL -1)
-    problem("job `fork-skipped` holds a permission; it needs none")
+if(NOT job_fork-skipped MATCHES "\n    permissions:\n      contents: read\n    [a-z]")
+    problem("job `fork-skipped` does not hold exactly contents: read, for the checkout of its script")
 endif()
 if(NOT job_review MATCHES "\n    permissions:\n      contents: read\n      pull-requests: read\n    [a-z]")
     problem("job `review` does not hold exactly contents: read and pull-requests: read")
@@ -246,7 +245,11 @@ function(check_step_lines step first)
         if(in_run AND NOT expression EQUAL -1)
             problem("step '${first}': an expression inside a run: script; pass it through env:")
         endif()
-        if(stripped MATCHES "^(- )?run: " AND NOT stripped MATCHES "^(- )?run: cmake( -D[^ ]+)* -P base/cmake/[a-z_]+\\.cmake$")
+        if(stripped MATCHES "^(- )?run: cmake( -D[^ ]+)* -P base/(cmake/[a-z_]+\\.cmake)$")
+            if(NOT EXISTS "${REPOSITORY}/${CMAKE_MATCH_3}")
+                problem("step '${first}': runs ${CMAKE_MATCH_3}, which does not exist")
+            endif()
+        elseif(stripped MATCHES "^(- )?run: ")
             problem("step '${first}': '${stripped}' is not one `cmake -P base/cmake/<name>.cmake` command")
         endif()
         if(stripped MATCHES "^(- )?run: [|>]")

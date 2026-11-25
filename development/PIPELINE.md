@@ -83,7 +83,10 @@ flowchart LR
     `pull_request_target`, checks out only the default branch's commit and the
     bot's pinned commit, runs nothing from the head, and holds least privilege;
     `cmake -P cmake/check_review_configuration.cmake` in the `spec` job holds
-    those properties and that every file the rubric names exists. A change to
+    those properties, that each `run:` step is one `cmake -P` of a script in
+    the base checkout (`cmake/require_settings.cmake`, or
+    `cmake/review_bot.cmake` for a command of the bot), and that every file
+    the rubric names exists. A change to
     the rubric, CODEOWNERS or `review.yml` needs the maintainer's explicit
     attention.
 15. **The release** (R-3). `release.yml` runs `verify` → `package` →

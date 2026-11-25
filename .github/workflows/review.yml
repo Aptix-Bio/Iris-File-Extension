@@ -10,6 +10,14 @@
 #      fails if a blocking item failed or job 1 did.
 # Both print the review to their log, each line starting `review_bot:`.
 #
+# Each `run:` step is one `cmake -P` of a script in the default branch's checkout
+# (development/ci_runners.md, "Workflows are simple; CMake does the work"):
+# cmake/require_settings.cmake checks the secrets, and cmake/review_bot.cmake runs one command of
+# the bot (STEP), with the values it passes read from the step's `env:`. The settings check is
+# each job's second step, after the checkout that brings its script: that checkout needs no
+# secret, so it cannot fail for want of one, and the check still runs before any step that uses
+# a secret.
+#
 # Where the bot comes from. The bot lives in Aptix-Bio/governance, a private repository, and
 # GitHub lets only private repositories use a private repository's actions ("Access is allowed
 # only from private repositories": docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository,
@@ -65,7 +73,10 @@ jobs:
     name: 1. Aptix Review Agent
     if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: blacksmith-2vcpu-ubuntu-2404
-    # Room for a reply of the bot's 64,000 output tokens; a complete review takes minutes.
+    # Room for a reply of the bot's whole output, MAX_TOKENS = 128,000 at the pinned commit (effort
+    # xhigh). Reviews return about 110 output tokens a second (Iris-Headers run 45652621799,
+    # 2026-11-25: 6,033 in 55 seconds; a 30,840-token review took 4 minutes 47 seconds), so a reply
+    # of the full 128,000 takes about 20 minutes and 30 bound it.
     timeout-minutes: 30
     cache-mode: write
     permissions:
@@ -100,7 +111,7 @@ jobs:
           PYTHON: ${{ steps.bot.outputs.python }}
           SCRIPT: ${{ steps.bot.outputs.script }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: '"$PYTHON" "$SCRIPT" transcript-key --pr "$PR_NUMBER"'
+        run: cmake -DSTEP=transcript-key -P base/cmake/review_bot.cmake
       - if: steps.previous.outputs.restore-key != ''
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -118,10 +129,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RULES_SHA: ${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          "$PYTHON" "$SCRIPT" review --pr "$PR_NUMBER" --base-dir base --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" \
-            --rubric-commit "$RULES_SHA" --bot-ref "$BOT_REF" --run-url "$RUN_URL" --out verdict.json --transcript transcript.json
-          test -s verdict.json
+        run: cmake -DSTEP=review -P base/cmake/review_bot.cmake
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: transcript.json
@@ -181,13 +189,21 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: '"$PYTHON" "$SCRIPT" publish --pr "$PR_NUMBER" --head-sha "$HEAD_SHA" --rubric base/.github/review/rubric.toml --base-dir base --verdict verdict.json --run-url "$RUN_URL"'
+        run: cmake -DSTEP=publish -P base/cmake/review_bot.cmake
 
   fork-skipped:
     name: Fork pull requests get no model review
     if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name != github.repository
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 2
-    permissions: {}
+    # contents: read for the checkout of the default branch's commit that brings the script; this
+    # job reads nothing from the pull request and holds no secret.
+    permissions:
+      contents: read
     steps:
-      - run: echo "::notice title=No model review for a fork::The review bot holds the model key and a write token, which pull_request_target would give to a fork's pull request; a maintainer reviews this change, or pushes it to a branch here to have the bot review it (.github/workflows/review.yml)."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: base
+          persist-credentials: false
+      - run: cmake -DSTEP=fork-notice -P base/cmake/review_bot.cmake

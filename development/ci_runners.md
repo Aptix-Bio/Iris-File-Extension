@@ -52,7 +52,9 @@ same work twice. Modular reuse and frequent cache hits are the two levers.
 - **Settings are checked first.** A job that needs a repository variable or
   secret names each missing one in its first step
   (`cmake/require_settings.cmake`), before an action fails without saying
-  which setting to create.
+  which setting to create. Where the script comes from a checkout, as in
+  `review.yml`, the check is the step after that checkout, which needs no
+  setting and so cannot fail for want of one.
 
 ## Caches
 
@@ -96,5 +98,5 @@ Actions. A repository secret of the same name takes precedence over the
 organization's ("the secret at the lowest level takes precedence":
 https://docs.github.com/en/actions/reference/security/secrets, read
 2026-11-24); this repository holds its own `GOVERNANCE_READ_TOKEN`. Each
-review job's first step names any that is missing
+review job's settings check, the step after its base checkout, names any that is missing
 (`cmake/require_settings.cmake`) without printing a value.
