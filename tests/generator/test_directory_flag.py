@@ -1,14 +1,15 @@
-"""`python3 -m generator -d DIR` resolves its relative paths against DIR.
+"""`generate_IFE.py` runs from any directory; `-d DIR` names the root.
 
-Without -d, --schema-dir, --out-dir and --docs-dir are relative to the
-current directory, so the generator works only when run from the repository
-root, and every caller elsewhere (spec/build_document.sh run by another
-repository's build, an IDE, a script) has to change directory first. With -d
-the caller names the root instead. Absolute paths are left as they are.
+generate_IFE.py is the generator's one entry point. --schema-dir, --out-dir
+and --docs-dir resolve against -d, which defaults to the repository that holds
+the script, so a caller elsewhere (spec/build_document.sh run by another
+repository's build, an IDE, a script) runs it by path without changing
+directory or setting PYTHONPATH. With -d the caller names another root.
+Absolute paths are left as they are.
 
-Run from a temporary directory with PYTHONPATH naming the repository, which
-is how a caller outside the root reaches the module. Stdlib-only, like
-test_determinism.py: a plain script that exits non-zero on failure.
+Run from a temporary directory, with no PYTHONPATH, which is how a caller
+outside the root reaches it. Stdlib-only, like test_determinism.py: a plain
+script that exits non-zero on failure.
 """
 
 from __future__ import annotations
@@ -20,11 +21,12 @@ import tempfile
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_ENTRY_POINT = _REPO_ROOT / "generate_IFE.py"
 
 
 def _run(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    env = dict(os.environ, PYTHONPATH=str(_REPO_ROOT))
-    return subprocess.run([sys.executable, "-m", "generator", *args],
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    return subprocess.run([sys.executable, str(_ENTRY_POINT), *args],
                           cwd=cwd, env=env, capture_output=True, text=True)
 
 
@@ -33,11 +35,12 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as scratch:
         elsewhere = Path(scratch)
 
-        # The default --schema-dir, spec/, resolved against -d rather than
-        # against a directory that has no spec/.
-        result = _run(elsewhere, "-d", str(_REPO_ROOT), "--validate")
+        # With no -d, the default --schema-dir, spec/, resolves against the
+        # repository holding the script rather than against the working
+        # directory, which has no spec/.
+        result = _run(elsewhere, "--validate")
         if result.returncode != 0:
-            failures.append(f"-d ROOT --validate from elsewhere exited {result.returncode}:\n{result.stderr}")
+            failures.append(f"--validate from elsewhere exited {result.returncode}:\n{result.stderr}")
 
         # Relative output directories land under -d; an absolute schema
         # directory is used as given.
@@ -56,7 +59,7 @@ def main() -> int:
     for failure in failures:
         print(f"FAIL: {failure}", file=sys.stderr)
     if not failures:
-        print("generator -d: relative paths resolve against the named directory")
+        print("generate_IFE.py: runs from any directory; relative paths resolve against -d")
     return 1 if failures else 0
 
 

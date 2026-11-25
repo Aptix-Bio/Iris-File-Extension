@@ -8,7 +8,7 @@ Nothing else connects the two, so a mistyped tag publishes 1.2-labelled
 archives full of 1.1 constants. The fix for that is a retag, which is why
 this runs before anything is compiled rather than after.
 
-It also refuses to publish a draft. `python3 -m generator --validate` already
+It also refuses to publish a draft. `python3 generate_IFE.py --validate` already
 requires a ratified revision to carry a date; this is the complementary rule,
 that a release requires a ratified revision at all. A published binary is an
 authority claim about a byte format, and "draft" is precisely the statement

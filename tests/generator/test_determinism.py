@@ -31,8 +31,7 @@ def _generate(out_root: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         [
             sys.executable,
-            "-m",
-            "generator",
+            str(_REPO_ROOT / "generate_IFE.py"),
             "--schema-dir", str(_REPO_ROOT / "spec"),
             "--out-dir", str(out_root / "generated_source"),
             "--docs-dir", str(out_root / "generated_docs"),
@@ -68,7 +67,7 @@ def test_two_runs_are_byte_identical() -> None:
             proc = _generate(out)
             if proc.returncode != 0:
                 raise AssertionError(
-                    f"`python -m generator` exited {proc.returncode}\n"
+                    f"`generate_IFE.py` exited {proc.returncode}\n"
                     f"stderr tail:\n{proc.stderr[-1500:]}"
                 )
         diffs = _differences(a, b)

@@ -136,8 +136,8 @@ whatever the generator's gate says. A spec addition refreshes tests/wire/witness
 pull request (`python3 tools/refresh_witness.py`); a witness change without a matching spec change,
 or one that alters a shipped fact rather than adding one, fails unless the description justifies
 it as a reviewed wire correction recorded in tests/wire/README.md. Generated output matches the
-generator: generated_source/ and generated_docs/ are produced by `python3 -m generator` at
-configure, are ignored by git apart from their README.md, and are never hand-edited or committed
+generator: generated_source/ and generated_docs/ are produced by `python3 generate_IFE.py` at
+configure into the build tree, never in the source tree, and are never hand-edited or committed
 (fix the emitter in generator/emit/ instead). The spec job proves it with `--validate` (consistency
 and the append-only gate against the committed witness), a regeneration, and `--check` (every
 generated file's banner witness hash matches the current spec, and the witness is not stale); the

@@ -10,9 +10,10 @@
 :xrefstyle: full
 :icons: font
 :source-highlighter: rouge
-// Where the generated tables live. Overridden on the command line so the
-// document builds from a build tree as well as from the source tree.
-:generated: ../generated_docs
+// Where the generated tables live: generate_IFE.py's default, a build
+// product. spec/build_document.sh overrides it on the command line with the
+// directory it generated into.
+:generated: ../build/generated_docs
 include::{generated}/attributes.adoc[]
 
 [discrete]

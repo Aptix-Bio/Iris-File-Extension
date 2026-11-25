@@ -60,9 +60,10 @@ generated from them (`spec/README.md`, `generator/README.md`):
 - **Append-only.** A fact already in a version group is never moved,
   resized, retyped, renamed or removed; new facts arrive as additions, and a
   member is retired with `deprecated` (CONTRIBUTING.md, "The absolutes").
-- **Generated output is never edited.** `generated_source/` and
-  `generated_docs/` are rebuilt from the spec at configure; a fix goes into
-  the emitter under `generator/emit/`.
+- **Generated output is never edited or committed.** `generated_source/` and
+  `generated_docs/` are build products, written by `generate_IFE.py` into the
+  build directory at configure; a fix goes into the emitter under
+  `generator/emit/`.
 - **Little-endian on disk, on every host.** File bytes are read and written
   through `IFE_Bytes.hpp` or the generated handles, never by casting a
   pointer into the file to a multi-byte type.

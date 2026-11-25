@@ -112,10 +112,10 @@ def ife_tests(
 
     native.genrule(
         name = "future_generated",
-        # generator/ must be declared: a genrule's sandbox contains exactly
-        # its inputs, and `python3 -m generator` resolves the package from
-        # the cwd.
-        srcs = [":future_spec"] + native.glob(["generator/**/*.py"]),
+        # generate_IFE.py and generator/ must be declared: a genrule's
+        # sandbox contains exactly its inputs. -d . resolves the paths
+        # against the execution root, as in BUILD.bazel's genrule.
+        srcs = [":future_spec", "generate_IFE.py"] + native.glob(["generator/**/*.py"]),
         outs = [
             "tests/fixtures/future_versioning/generated/IFE_Blocks.hpp",
             "tests/fixtures/future_versioning/generated/IFE_Blocks.cpp",
@@ -124,7 +124,7 @@ def ife_tests(
             "tests/fixtures/future_versioning/generated/IFE_Validation.cpp",
         ],
         cmd = python_resolve +
-              "$$PY -m generator " +
+              "$$PY $(location generate_IFE.py) -d . " +
               "--schema-dir $(RULEDIR)/tests/fixtures/future_versioning " +
               "--out-dir $(RULEDIR)/tests/fixtures/future_versioning/generated " +
               "--docs-dir $(RULEDIR)/tests/fixtures/future_versioning/generated_docs",

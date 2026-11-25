@@ -2,24 +2,28 @@
 # Build the IFE specification document — HTML and PDF — from one source.
 #
 #     spec/ife_spec.adoc          hand-written narrative and normative prose
-#   + generated_docs/**/*.adoc    every layout and value table, from spec/*.json
+#   + <docs-dir>/**/*.adoc        every layout and value table, from spec/*.json
 #   = build/doc/ife_spec.{html,pdf}
 #
 # There is no preprocessor here and no hand-written layout content: Asciidoctor
 # resolves `include::` itself, which is why the source is AsciiDoc rather than
 # Markdown with a bespoke anchor syntax.
 #
-# Usage: spec/build_document.sh [output-dir]        (default: build/doc)
+# Usage: spec/build_document.sh [output-dir] [docs-dir]
+#   output-dir  the HTML and PDF           (default: build/doc)
+#   docs-dir    the generated tables       (default: build/generated_docs, as
+#               generate_IFE.py and `cmake -B build` write them)
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 out="${1:-$root/build/doc}"
+docs="${2:-$root/build/generated_docs}"
 mkdir -p "$out"
 
 # The generated half must be current, or the document renders a stale layout.
-# Cheap, deterministic, and the same command CI runs.
-# -d and PYTHONPATH name the root, so this works from any working directory.
-PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" python3 -m generator -d "$root" --docs-dir "$root/generated_docs" >/dev/null
+# Cheap, deterministic, and the same command CI runs. generate_IFE.py finds
+# the repository itself, so this works from any working directory.
+python3 "$root/generate_IFE.py" --docs-dir "$docs" >/dev/null
 
 command -v asciidoctor >/dev/null || {
     echo "asciidoctor not found." >&2
@@ -30,7 +34,7 @@ command -v asciidoctor >/dev/null || {
 
 # Document status lives in the provenance table, from ife_header.json --
 # not in a banner the reader has to scroll past on every build.
-common=(-a "generated=$root/generated_docs" -r asciidoctor)
+common=(-a "generated=$docs" -r asciidoctor)
 
 # Left-aligned body text: the default theme justifies, which spaces words
 # badly around the long identifiers this document is made of.
@@ -68,9 +72,9 @@ fi
 # missing -- the generator writes it, --check is happy, and the document simply
 # does not mention it.
 missing=""
-for table in "$root"/generated_docs/constants/*.adoc "$root"/generated_docs/layout/*.adoc; do
+for table in "$docs"/constants/*.adoc "$docs"/layout/*.adoc; do
     [ -e "$table" ] || continue
-    name="${table#"$root"/generated_docs/}"
+    name="${table#"$docs"/}"
     grep -qF "$name" "$root/spec/ife_spec.adoc" || missing="$missing $name"
 done
 if [ -n "$missing" ]; then

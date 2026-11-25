@@ -23,10 +23,16 @@ visible in the source:
 so this checks for them directly. It is not a substitute for the MSVC or
 Bazel jobs; it is the part of them that does not need those hosts.
 
-Usage: tools/portability_lint.py [--quiet]     (non-zero exit on any finding)
+Usage: tools/portability_lint.py [--quiet] [--generated-dir DIR]
+                                             (non-zero exit on any finding)
+
+--generated-dir names the generated C++ to scan with the source, by default
+build/generated_source/, where `python3 generate_IFE.py` and `cmake -B build`
+write it.
 """
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -34,6 +40,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from generator.cli import DEFAULT_OUT_DIR  # noqa: E402
 from generator.validate import _PLATFORM_MACROS  # noqa: E402
 
 SOURCE_DIRS = ("src", "include", "tests", "examples")
@@ -149,7 +156,7 @@ _SAL_ANNOTATIONS: dict[str, str] = {
 }
 
 
-def check_sal_annotations() -> list[str]:
+def check_sal_annotations(generated_dir: Path) -> list[str]:
     """Identifiers that <sal.h> defines as macros in every MSVC translation unit.
 
     <yvals.h> — the base of the MSVC standard library — includes <sal.h>, so
@@ -161,23 +168,19 @@ def check_sal_annotations() -> list[str]:
     found: list[str] = []
     names = "|".join(re.escape(k) for k in sorted(_SAL_ANNOTATIONS, key=len, reverse=True))
     pattern = re.compile(rf"\b({names})\b")
-    # generated_source is scanned too: the emitter writes the same identifiers,
-    # and the generated layer is compiled by MSVC.
-    for directory in SOURCE_DIRS + ("generated_source",):
-        base = ROOT / directory
+    # The generated layer is scanned too: the emitter writes the same
+    # identifiers, and the generated layer is compiled by MSVC.
+    # An absent generated layer is not a clean one. It is a build product, so
+    # on a fresh clone this check would otherwise report it clean without
+    # having read a byte of it. Say so instead of passing.
+    if not generated_dir.is_dir():
+        found.append(
+            f"{generated_dir} does not exist, so the generated layer was not "
+            "scanned for SAL collisions. Run `python3 generate_IFE.py` (or pass "
+            "--generated-dir) and re-run this lint."
+        )
+    for base in [ROOT / directory for directory in SOURCE_DIRS] + [generated_dir]:
         if not base.is_dir():
-            # An absent generated_source is not a clean one. It is gitignored
-            # and written at configure time, so on a fresh clone this check
-            # would otherwise report the generated layer clean without having
-            # read a byte of it -- and the emitter writes the same identifiers,
-            # which is the whole reason it is scanned. Say so instead of
-            # passing.
-            if directory == "generated_source":
-                found.append(
-                    "generated_source/ does not exist, so the generated layer was not "
-                    "scanned for SAL collisions. Configure the project (or run "
-                    "`python3 -m generator`) and re-run this lint."
-                )
             continue
         for path in sorted(base.rglob("*")):
             if path.suffix not in SOURCE_SUFFIXES:
@@ -187,7 +190,7 @@ def check_sal_annotations() -> list[str]:
                 for match in pattern.finditer(line):
                     name = match.group(1)
                     found.append(
-                        f"{path.relative_to(ROOT)}:{number}: {name!r} is "
+                        f"{path}:{number}: {name!r} is "
                         f"{_SAL_ANNOTATIONS[name]}, defined by MSVC's <yvals.h> in every "
                         "translation unit. Any use — declaration or call — expands to "
                         "nothing on MSVC. Rename it."
@@ -324,32 +327,34 @@ def check_workflow_include_paths() -> list[str]:
     return found
 
 
-CHECKS = (
-    ("platform macros in declarations", check_platform_macros),
-    ("SAL annotations in identifiers", check_sal_annotations),
-    ("paths through string literals", check_paths_through_string_literals),
-    ("ctest without a configuration", check_ctest_configuration),
-    ("Bazel-declared headers", check_bazel_declared_headers),
-    ("workflow include paths", check_workflow_include_paths),
-)
-
-
 def main() -> int:
-    quiet = "--quiet" in sys.argv
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--quiet", action="store_true", help="print findings only")
+    parser.add_argument("--generated-dir", type=Path, default=ROOT / DEFAULT_OUT_DIR,
+                        help=f"the generated C++ to scan (default: {DEFAULT_OUT_DIR}/)")
+    args = parser.parse_args()
+    checks = (
+        ("platform macros in declarations", check_platform_macros),
+        ("SAL annotations in identifiers", lambda: check_sal_annotations(args.generated_dir.absolute())),
+        ("paths through string literals", check_paths_through_string_literals),
+        ("ctest without a configuration", check_ctest_configuration),
+        ("Bazel-declared headers", check_bazel_declared_headers),
+        ("workflow include paths", check_workflow_include_paths),
+    )
     total = 0
-    for label, check in CHECKS:
+    for label, check in checks:
         findings = check()
         total += len(findings)
         if findings:
             print(f"portability: {label}", file=sys.stderr)
             for finding in findings:
                 print(f"  {finding}", file=sys.stderr)
-        elif not quiet:
+        elif not args.quiet:
             print(f"portability: {label} — clean")
     if total:
         print(f"portability: {total} finding(s)", file=sys.stderr)
         return 1
-    if not quiet:
+    if not args.quiet:
         print("portability: nothing to report")
     return 0
 

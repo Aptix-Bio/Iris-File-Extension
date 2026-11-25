@@ -11,29 +11,32 @@ CONTRIBUTING.md and CLAUDE.md), restated for the current workflow.
 
 ```mermaid
 flowchart LR
-    S["spec/*.json"] -->|"--validate<br/>against the witness"| G["python3 -m generator<br/>at configure"]
-    G --> GS["generated_source/<br/>generated_docs/"]
+    S["spec/*.json"] -->|"--validate<br/>against the witness"| G["generate_IFE.py<br/>at configure"]
+    G --> GS["build tree:<br/>generated_source/<br/>generated_docs/"]
     GS -->|"--check"| B["CMake or Bazel build"]
     H[".deps/irisheaders-src<br/>FetchContent"] --> B
     C[".deps/corpus/<br/>manifest digests"] --> B
     B --> T["ctest / bazel test"]
     T --> CI["ci.yml on Blacksmith"]
     CI --> PR["pull request<br/>review.yml, rubric.toml"]
+    G --> RA["release.yml: the<br/>generated-source archive"]
 ```
 
 ## Rules
 
 1. **The specification first.** A wire change is an edit to `spec/*.json`;
-   `python3 -m generator --validate` passes before anything is generated.
+   `python3 generate_IFE.py --validate` passes before anything is generated.
    Narrative goes in `spec/ife_spec.adoc`, and normative clauses live in the
    JSON so a diagnostic and the document cite one source (D1).
-2. **Generated output is never edited or committed.** `generated_source/` and
-   `generated_docs/` are rebuilt at configure. A fix goes into
-   `generator/emit/`; after a schema or emitter change, run `cmake .` (the
-   200.0 gating fixture is generated at configure) and `touch
-   generated_source/*.hpp` before rebuilding, since Make compares
-   modification times at one-second resolution and misses a header
-   regenerated in the same second as the last link.
+2. **Generated output is never edited or committed.** `generate_IFE.py`, the
+   generator's one entry point, writes `generated_source/` and
+   `generated_docs/` into the build directory at every configure, never into
+   the source tree (R-7); the spec, the witness and the generator are
+   configure dependencies, so a build after an edit regenerates first. A fix
+   goes into `generator/emit/`. After a schema or emitter change, `touch
+   <build>/generated_source/*.hpp` before rebuilding if the last link was in
+   the same second, since Make compares modification times at one-second
+   resolution and misses a header regenerated in it.
 3. **Append-only, and the witness moves with the spec.** A shipped fact is
    never moved, resized, retyped, renamed or removed; retirement is
    `deprecated` with `{version, reason}` (D2). A change that adds a fact
@@ -46,7 +49,7 @@ flowchart LR
    invisible; FastFHIR shipped a recovery engine Bazel was not compiling.
 5. **The gate run**, chained with `&&` so that a failed build cannot report a
    pass from stale binaries:
-   `cmake . -B build && cmake --build build --config Release -j && ctest --test-dir build -C Release --output-on-failure && python3 -m generator --check && python3 tools/portability_lint.py`.
+   `cmake . -B build && cmake --build build --config Release -j && ctest --test-dir build -C Release --output-on-failure && python3 generate_IFE.py --check && python3 tools/portability_lint.py` (both read `build/generated_source/`, where this configure wrote it).
    Recovery and read-path work also runs `cmake --build --preset asan && ctest --preset asan`.
 6. **Measure reads against a Release build.** Costs are about ten times higher
    at `-O0`, so a decision taken on a Debug build is taken on inflated numbers
@@ -90,8 +93,9 @@ flowchart LR
     the rubric names exists. A change to
     the rubric, CODEOWNERS or `review.yml` needs the maintainer's explicit
     attention.
-15. **The release** (R-3). `release.yml` runs `verify` → `package` →
-    `document` → `publish` on a tag; `tools/release_guard.py` requires the tag,
+15. **The release** (R-3). `release.yml` runs `verify` → `package`,
+    `document` and `generated` → `publish` on a tag; `generated` archives the
+    C++ layer as `IrisFileExtension-<version>-generated-source.tar.gz` (R-7); `tools/release_guard.py` requires the tag,
     the declared version and the revision's ratification to agree before a
     compiler runs, and refuses a draft. `workflow_dispatch` runs everything but
     `publish`.
@@ -114,4 +118,4 @@ flowchart LR
 | `ci.yml` | `emscripten (the residency branch)` | the WebAssembly build of `IFE_Window` |
 | `ci.yml` | `big-endian (s390x)` | the suite on a big-endian host under emulation |
 | `review.yml` | `1. Aptix Review Agent`, `2. Update PR from Agent` | the rubric's items, the commit trace |
-| `release.yml` | `verify`, `package`, `document`, `publish` | a tagged release |
+| `release.yml` | `verify`, `package`, `document`, `generated`, `publish` | a tagged release |
