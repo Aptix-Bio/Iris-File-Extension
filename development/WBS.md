@@ -65,7 +65,7 @@ touch different files from the recovery lane and can run beside it.
 |---|---|---|
 | CI-3 | the review bot reviews every pull request; the plan moves to `development/` | `doing` (pull request #6) |
 | TE-1 | tile encoding value 3 is `TILE_ENCODING_AV1`, a bare AV1 sequence, in place of AVIF | `doing` (pull request #7, stacked on #6); TE-1.4 `blocked` on OD-T1 |
-| IV-1 | `ATTRIBUTES.VERSION` under `METADATA_I2S` is the I2S version packed as `major << 8 \| minor` (D27) | `doing` (pull request #6) |
+| IV-1 | `ATTRIBUTES.VERSION` under `METADATA_I2S` is the I2S version packed as `major << 8 \| minor` (D27) | `doing` (pull request #8, stacked on #7) |
 | CI-1 | every CI job on a pinned Blacksmith runner | `done`; VERIFY and the macOS gating owed |
 | VL-1 | the validation layer's diagnostic sink is safe under a multithreaded writer | `todo` (P1, latent) |
 | RB-4 to RB-9 | the recovery census grows its solver, tile streams, report, apply and calibration | `todo`; RB-5 to RB-7 wait on OD-R1, OD-R3, OD-R4, OD-R5 defaults |
