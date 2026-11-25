@@ -50,6 +50,7 @@ flowchart LR
     R3["R-3 release 1.1"] --> R4["R-4 Python bindings"]
     R4 --> R5["R-5 JS/WASM bindings"]
     R3 --> RC5["RC-5 checksum footer<br/>1.2 material"]
+    R7["R-7 generated layer out of<br/>the source tree, released<br/>doing"] --> R3
     TE1["TE-1 tile encoding 3 is AV1<br/>doing"] --> OD["OD-T1 key plane,<br/>decode order to depth"]
     IV1["IV-1 I2S version<br/>packed in VERSION"]
     TE2["TE-2 tile encodings 4, 5:<br/>UASTC, XUASTC<br/>doing"] --> OD2["OD-T3 XUASTC footprint<br/>OD-T4 XUASTC mip levels"]
@@ -75,6 +76,7 @@ touch different files from the recovery lane and can run beside it.
 | R-3 | release 1.1 | `blocked` on the maintainer's review of the revision (R-3.1) |
 | R-4, R-5 | Python and JavaScript/WebAssembly bindings | `todo`, after R-3 (D15) |
 | R-6 | an expectations header for the 1.1 witness | `doing`: the test exists, its record is owed |
+| R-7 | `generate_IFE.py` is the generator's one entry point; the generated layer is built out of the source tree and published with each release | `doing` (pull request #6) |
 | ZC-1 to ZC-5 | the read path as a const lens (D14) | `todo` |
 | BL-1 to BL-7 | carried forward, none gating the release | `todo` |
 
@@ -447,6 +449,32 @@ recorded. [Wire_04]
 - [ ] **R-6 — record the evidence**: check the test against R-6's **Done when**
   (every 1.1 field present on the 1.1 witness and absent on the 1.0 witness;
   re-introducing the frame-anchor bug turns a test red), then tick with the run.
+
+## R-7 — The generated layer is a build product, published with each release `doing`
+
+Decided 2026-11-25: `generate_IFE.py` at the repository root is the
+generator's one documented entry point, and the generated C++ and documents
+are build products. CMake generates them into its binary directory, as
+Bazel's genrule already writes into `$(RULEDIR)`, so no checkout carries a
+copy beside the committed files, nothing generated can be staged by mistake,
+and two build directories of one checkout no longer overwrite each other's
+copy. `release.yml` archives the same output as
+`IrisFileExtension-<version>-generated-source.tar.gz`, so a consumer without
+Python takes the generated layer from the release. Branch
+`feature/ReviewBot_CI-3`, pull request #6. [Spec_01, Release_04]
+
+- [ ] R-7.1 **Red first.** `tests/generator/test_out_of_source.py` (ctest
+      `ife_generated_out_of_source`) requires the build to compile the layer
+      from outside the source tree and the source tree to hold no
+      `generated_source/` or `generated_docs/`; `tests/generator/test_directory_flag.py`
+      runs `generate_IFE.py` by path from another directory.
+- [ ] R-7.2 **Green.** `generate_IFE.py` added and every caller switched to
+      it; CMake generates into `${CMAKE_CURRENT_BINARY_DIR}` at every
+      configure, the spec and generator files as configure dependencies, and
+      `IFE_RUN_GENERATOR` removed; the test fixtures move to the binary
+      directory too; `release.yml` publishes the generated-source archive.
+- [ ] R-7.3 **VERIFY:** the first `release.yml` run by `workflow_dispatch`
+      uploads the generated-source archive beside the packages.
 
 ## ZC — The read path as a const lens `todo`
 

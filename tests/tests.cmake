@@ -518,6 +518,17 @@ if(IFE_BUILD_TESTS)
                 ${PROJECT_SOURCE_DIR}/tests/generator/test_attributes_version.py
     )
 
+    # The generated layer is a build product: this build compiles it from its
+    # own tree and the source tree holds none of it (R-7). CMake-only, since
+    # Bazel's genrule writes into $(RULEDIR) by construction.
+    add_test(
+        NAME ife_generated_out_of_source
+        COMMAND ${Python3_EXECUTABLE}
+                ${PROJECT_SOURCE_DIR}/tests/generator/test_out_of_source.py
+                --source ${PROJECT_SOURCE_DIR}
+                --generated ${IFE_GENERATED_DIR}
+    )
+
     # The README's C++ examples, compiled as published (syntax-only) against the
     # real headers. They once drifted from the API while every test stayed
     # green; each ```cpp block carries an <!-- ife-compile: ... --> annotation
