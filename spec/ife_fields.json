@@ -266,6 +266,11 @@
               "name": "TILE_LENGTH",
               "type": "u16",
               "description": "Edge length in pixels of the square tiles this slide is divided into. Zero, and absence in a file written under 1.0, both denote the default of 256. Encoders are recommended to use 256."
+            },
+            {
+              "name": "MIP_LEVELS",
+              "type": "u16",
+              "description": "Number of mip levels every tile byte-stream of this slide carries, level 0 (the tile at full resolution) first; level n is TILE_LENGTH >> n pixels square. Recorded once for the slide instead of in each tile's frame, so no tile carries the overhead (decided 2026-11-25). Zero, one, and absence in a file written under 1.0 all denote level 0 alone. Under TILE_ENCODING_UASTC the coarsest level, TILE_LENGTH >> (MIP_LEVELS - 1), shall be at least 4 pixels, one UASTC block. Under TILE_ENCODING_XUASTC it shall be 0 or 1, because an XUASTC LDR bitstream records no total length by which concatenated levels could be split. Under every other tile encoding it carries no meaning: writers shall write zero and readers shall ignore it."
             }
           ]
         }

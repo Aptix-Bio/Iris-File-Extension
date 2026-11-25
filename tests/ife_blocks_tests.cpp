@@ -1240,7 +1240,7 @@ void test_non_jpeg_tile_encodings_round_trip() {
                                 k::TileEncodings::TILE_ENCODING_UASTC,
                                 k::TileEncodings::TILE_ENCODING_XUASTC}) {
         // header_size, not header_size_v1_0: the handle's __size is the buffer
-        // length, and fits() requires the newest header (46 B with TILE_LENGTH).
+        // length, and fits() requires the newest header (48 B with TILE_LENGTH and MIP_LEVELS).
         std::vector<BYTE> f(b::TILE_TABLE::header_size, 0);
         BYTE* p = f.data();
         const b::TileTableCreateInfo info{
