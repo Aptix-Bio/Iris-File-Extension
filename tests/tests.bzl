@@ -337,6 +337,16 @@ def ife_tests(
         deps = [ife],
     )
 
+    # The colour and frame-size rules of TILE_ENCODING_AV1 tiles (TE-3, D31),
+    # through the validation layer and validate_file_structure.
+    cc_test(
+        name = "ife_av1_tile_stream_tests",
+        srcs = ["tests/ife_av1_tile_stream_tests.cpp"],
+        copts = copts,
+        size = "small",
+        deps = [ife, ife_validation],
+    )
+
     # The recovery census (RB-3), tested as FastFHIR tests its own.
     cc_test(
         name = "ife_recovery_tests",

@@ -369,6 +369,31 @@ if(IFE_BUILD_TESTS)
     target_link_libraries(ife_boundary_results_tests PRIVATE ${IFE_Dependencies})
     add_test(NAME ife_boundary_results_tests COMMAND ife_boundary_results_tests)
 
+    # The colour and frame-size rules of TILE_ENCODING_AV1 tiles (TE-3, D31):
+    # the validation layer's check_tile_stream and validate_file_structure,
+    # over hand-built sequence headers, every truncation and seeded garbage.
+    # The library's sources and the validation layer in one binary, as an
+    # application that builds with the layer has them.
+    add_executable(
+        ife_av1_tile_stream_tests
+        ${PROJECT_SOURCE_DIR}/tests/ife_av1_tile_stream_tests.cpp
+        ${IFE_SOURCE_DIR}/IFE_Runtime.cpp
+        ${IFE_SOURCE_DIR}/IFE_Builder.cpp
+        ${IFE_SOURCE_DIR}/IFE_Parser.cpp
+        ${IFE_SOURCE_DIR}/IFE_Window.cpp
+        ${IFE_VALIDATION_SOURCE}
+        ${IFE_GENERATED_SOURCES}
+        ${irisheaders_SOURCE_DIR}/src/IrisMemory.cpp
+    )
+    target_include_directories(
+        ife_av1_tile_stream_tests PRIVATE ${IFE_INCLUDE_DIR} ${IFE_GENERATED_DIR}
+                                          ${irisheaders_SOURCE_DIR}/include
+                                          ${irisheaders_SOURCE_DIR}/priv
+    )
+    target_compile_features(ife_av1_tile_stream_tests PRIVATE cxx_std_20)
+    target_link_libraries(ife_av1_tile_stream_tests PRIVATE ${IFE_Dependencies})
+    add_test(NAME ife_av1_tile_stream_tests COMMAND ife_av1_tile_stream_tests)
+
     # No member of the abstraction may view into the mapping it was built
     # from (XP-4): the tree is built from a heap buffer, the buffer is
     # destroyed, and every string the tree keeps is read. Meaningless without

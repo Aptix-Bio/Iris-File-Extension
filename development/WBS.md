@@ -57,6 +57,7 @@ flowchart LR
     TE1["TE-1 tile encoding 3 is AV1<br/>doing"] --> OD["OD-T1 key plane,<br/>decode order to depth"]
     IV1["IV-1 I2S version<br/>packed in VERSION"]
     TE2["TE-2 tile encodings 4, 5:<br/>UASTC, XUASTC<br/>doing"] --> OD2["OD-T3 XUASTC footprint<br/>OD-T4 XUASTC mip levels"]
+    TE3["TE-3 AV1 colour and<br/>frame size<br/>doing"] --> ISD["Iris-Slide: decode<br/>refuses another size"]
     VL1["VL-1 parallel diagnostic log"]
     ZC["ZC-1..5 span read path"]
     BL["BL-1..7 backlog"]
@@ -72,6 +73,7 @@ touch different files from the recovery lane and can run beside it.
 | TE-1 | tile encoding value 3 is `TILE_ENCODING_AV1`, a bare AV1 sequence, in place of AVIF | `doing` (pull request #7, stacked on #6); TE-1.4 `blocked` on OD-T1 |
 | IV-1 | `ATTRIBUTES.VERSION` under `METADATA_I2S` is the I2S version packed as `major << 8 \| minor` (D27) | `doing` (pull request #8, stacked on #7) |
 | TE-2 | tile encodings 4 and 5 are `TILE_ENCODING_UASTC` and `TILE_ENCODING_XUASTC`, bare GPU block-compressed streams | `doing` (pull request #9, stacked on #8); TE-2.5 `blocked` on OD-T3, TE-2.6 on OD-T4 |
+| TE-3 | AV1 tiles decode to BT.601 full-range RGB at exactly TILE_LENGTH square, checked on the first sequence header by `validate_file_structure` and the validation layer (D31) | `doing` (branch `feature/Av1ColorAndSize_TE-3`; its pull request waits on #11) |
 | CI-1 | every CI job on a pinned Blacksmith runner | `done`; VERIFY and the macOS gating owed |
 | VL-1 | the validation layer's diagnostic sink is safe under a multithreaded writer | `todo` (P1, latent) |
 | RB-4 to RB-9 | the recovery census grows its solver, tile streams, report, apply and calibration | `todo`; RB-5 to RB-7 wait on OD-R1, OD-R3, OD-R4, OD-R5 defaults |
@@ -223,6 +225,25 @@ Iris-Slide requirement. [Wire_09, Wire_10, Wire_11, Wire_12]
   - [x] TE-2.4.4 **Review fixes.** `mip_levels` and `mip_levels_error` name their parameter `table` instead of the reserved `__table`; the tile edge is resolved once, by `tile_length`, whose default is `Abstraction::TileTable`'s, and `mip_levels_error` takes the resolved length, so `IFE_Runtime.cpp` no longer states 256 a second time (`DEFAULT_TILE_LENGTH` removed). Evidence: ctest 26 of 26 (Release, AppleClang) and 26 of 26 under ASan and UBSan; `--validate`, `--check` and both lints pass. [87f7a8a](https://github.com/Aptix-Bio/Iris-File-Extension/commit/87f7a8a7eae8282aa53ac7182e31990ede5f8b29)
 - [ ] TE-2.5 **XUASTC's block footprint and bitstream stability.** `blocked` on OD-T3. The specification takes the footprint from the bitstream and marks both open.
 - [ ] TE-2.6 **How an XUASTC tile carries levels beyond level 0.** `blocked` on OD-T4. `MIP_LEVELS` is 0 or 1 under XUASTC until it is decided.
+
+## TE-3 — AV1 tiles decode to BT.601 full-range RGB at exactly TILE_LENGTH square `doing`
+
+Decided 2026-11-26 (D31): every frame of a `TILE_ENCODING_AV1` tile decodes
+to RGB with the BT.601 matrix at full range, the conversion JPEG tiles use
+(JFIF), and is exactly TILE_LENGTH square. The tile's first sequence header
+declares it: `color_description_present_flag` 1, `matrix_coefficients` 6
+(MC_BT_601), `color_range` 1, 8-bit 4:2:0 (`seq_profile` 0) or 4:4:4
+(`seq_profile` 1) colour, `max_frame_width_minus_1` + 1 and
+`max_frame_height_minus_1` + 1 equal to TILE_LENGTH, `enable_superres` 0 and
+`film_grain_params_present` 0. `validate_file_structure` and the opt-in
+validation layer (`check_tile_stream`) parse that one header with a bounded
+reader (`include/IFE_Av1.hpp`); the Builder gains no check of its own, and the
+read path parses no tile stream (D14). A frame header may still shrink a
+frame (AV1 specification section 5.9.5), which IFE does not parse: the
+exact-size rule is normative, and a reader that decodes refuses a frame of any
+other size. Branch `feature/Av1ColorAndSize_TE-3`. [Wire_13]
+
+- [x] TE-3.1 **Red first.** `tests/ife_av1_tile_stream_tests.cpp` (ctest `ife_av1_tile_stream_tests`, both build systems) builds sequence headers with a bit writer that follows the AV1 syntax tables, on every branch of the syntax, and checks three headers libaom's aomenc 3.13.2 wrote; it requires each rule broken alone, each OBU framing requirement and each length bound to fail as CONFORMANCE naming the syntax element and its value, every prefix of a stream and every short payload to fail without reading past its allocation, 20,000 seeded garbage and damaged inputs to return, other encodings to go unparsed, and `validate_file_structure` to name the layer, tile, field and value. Evidence: the target does not compile against the tree at its commit, "no member named 'check_tile_stream' in namespace 'Iris::File::blocks'" (`ife_av1_tile_stream_tests.cpp:291`); every other target builds.
 
 ## VL-1 — The validation layer's diagnostic sink under a multithreaded writer `todo` (P1, latent)
 
