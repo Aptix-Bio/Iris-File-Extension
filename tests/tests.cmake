@@ -557,6 +557,15 @@ if(IFE_BUILD_TESTS)
                 ${PROJECT_SOURCE_DIR}/tests/generator/test_deprecated.py
     )
 
+    # external_check (D31, TE-3): IFE's blocks cross-checked against what a
+    # tile's AV1 sequence header reports. The section validates, the
+    # comparisons and diagnostics are emitted from it, and it is off the wire.
+    add_test(
+        NAME ife_generator_external_check
+        COMMAND ${Python3_EXECUTABLE}
+                ${PROJECT_SOURCE_DIR}/tests/generator/test_external_check.py
+    )
+
     # ATTRIBUTES.VERSION under METADATA_I2S is the I2S version packed as
     # `major << 8 | minor` (decided 2026-11-25): the schema and the narrative
     # state it as a "shall", the emitted tables carry it, and it moves no wire

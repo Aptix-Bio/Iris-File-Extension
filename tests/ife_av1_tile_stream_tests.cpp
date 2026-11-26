@@ -1,22 +1,26 @@
 /**
  * @file ife_av1_tile_stream_tests.cpp
- * @brief The colour and frame-size rules of TILE_ENCODING_AV1 tiles (TE-3,
- *        development/WBS.md; D31, development/ARCHITECTURE.md): each tile's
- *        first AV1 sequence header declares 8-bit 4:2:0 or 4:4:4 colour with
- *        the BT.601 matrix at full range, frames of exactly TILE_LENGTH square
- *        with superres off, and no film grain.
+ * @brief IFE's blocks agree with what each TILE_ENCODING_AV1 tile's first
+ *        sequence header reports (TE-3, development/WBS.md; D31,
+ *        development/ARCHITECTURE.md; `external_check` in
+ *        spec/ife_fields.json): TILE_LENGTH is the frame size, with superres
+ *        off; TILE_ENCODING_AV1's 8-bit BT.601 full-range colour is the
+ *        header's; a tile of more than one focal plane is no still picture.
  *
- * What this pins, through the two places the rules run:
- *   1. The opt-in validation layer's `check_tile_stream`: a conformant
- *      sequence header on every branch of its syntax passes; each rule, each
- *      OBU framing requirement and each bound fails as CONFORMANCE naming the
- *      syntax element and its value; a stream cut at every byte fails without
- *      reading past it (run under ASan); seeded garbage returns; a tile
- *      encoding with no stream clause is not parsed.
- *   2. `validate_file_structure`: a Builder-written AV1 slide passes, and one
- *      tile that breaks a rule fails as CONFORMANCE naming the layer, the tile,
- *      the field and its value. `abstract_file_structure` does not parse tile
- *      streams (D14), so it still reads that slide.
+ * What this pins, through the two places the checks run:
+ *   1. The opt-in validation layer's `check_tile_stream`: a header on every
+ *      branch of its syntax that agrees passes; each disagreement fails as
+ *      CONFORMANCE naming the IFE field, the AV1 syntax element and its
+ *      value; rules about the stream alone, with no IFE field behind them
+ *      (film grain, operating points, which OBUs come first), are not
+ *      checked; a stream the walk cannot read, cut at every byte, fails
+ *      without reading past it (run under ASan); seeded garbage returns; a
+ *      tile encoding with no external check is not read.
+ *   2. `validate_file_structure`: a Builder-written AV1 slide passes, and a
+ *      tile that disagrees fails as CONFORMANCE naming the layer, the tile,
+ *      its plane count, the syntax element and its value.
+ *      `abstract_file_structure` reads no tile stream (D14), so it still
+ *      reads that slide.
  *
  * The sequence headers are hand-built with a bit writer that follows the AV1
  * specification's syntax tables (https://aomediacodec.github.io/av1-spec/,
@@ -283,26 +287,33 @@ std::vector<BYTE> tile_stream(const SequenceHeader& s) {
 
 std::string g_diagnostic;
 
-b::Status check(const std::vector<BYTE>& stream, std::uint16_t length = TILE,
+b::Status check(const std::vector<BYTE>& stream, std::uint16_t length = TILE, std::uint16_t planes = 1,
                 k::TileEncodings encoding = k::TileEncodings::TILE_ENCODING_AV1) {
     b::ValidationHooks hooks = b::conformance_layer();
     hooks.diagnostic = &g_diagnostic;
     g_diagnostic.clear();
-    return b::check_tile_stream(encoding, length, stream.data(), stream.size(), 0, &hooks);
+    return b::check_tile_stream(encoding, length, planes, stream.data(), stream.size(), 0, &hooks);
 }
 
-/// A CONFORMANCE failure on @p field, storing @p found.
-bool refuses(const b::Status& status, const std::string& field, std::uint64_t found) {
+/// A CONFORMANCE failure on @p field, storing @p found, against @p block: the
+/// IFE field the element disagrees with, or TILE_PIXEL_DATA where the walk
+/// could not read the stream.
+bool refuses(const b::Status& status, const std::string& field, std::uint64_t found,
+             const std::string& block) {
     const bool matched = !status && status.code == b::Check::CONFORMANCE &&
-                         std::string(status.block) == "TILE_PIXEL_DATA" &&
-                         std::string(status.field) == field && status.found == found &&
-                         !g_diagnostic.empty();
+                         std::string(status.block) == block && std::string(status.field) == field &&
+                         status.found == found && !g_diagnostic.empty();
     if (!matched)
-        std::fprintf(stderr, "  expected %s %llu, got %s %llu (code %d)\n", field.c_str(),
-                     static_cast<unsigned long long>(found), status.field,
+        std::fprintf(stderr, "  expected %s: %s %llu, got %s: %s %llu (code %d)\n", block.c_str(),
+                     field.c_str(), static_cast<unsigned long long>(found), status.block, status.field,
                      static_cast<unsigned long long>(status.found), static_cast<int>(status.code));
     return matched;
 }
+
+constexpr const char* LENGTH   = "TILE_TABLE.TILE_LENGTH";
+constexpr const char* ENCODING = "TILE_TABLE.ENCODING";
+constexpr const char* PLANES   = "TILE_PIXEL_DATA.Z_PLANES";
+constexpr const char* STREAM   = "TILE_PIXEL_DATA";
 
 void test_conformant_headers_pass() {
     // Every branch of the syntax a conformant header can take.
@@ -357,95 +368,139 @@ void test_conformant_headers_pass() {
 /// as an encoder independent of the bit writer above lays them out: each a
 /// temporal delimiter, then the sequence header OBU.
 void test_headers_an_encoder_wrote() {
-    // 4:2:0 input marked XCOLORRANGE=FULL, --limit=2 --matrix-coefficients=bt601
-    // --color-primaries=bt709 --transfer-characteristics=srgb: the full
-    // sequence header form, conformant.
+    // aomenc --obu --limit=2 --matrix-coefficients=bt601 --color-primaries=bt709
+    //   --transfer-characteristics=srgb -o two.obu in.y4m   (4:2:0, XCOLORRANGE=FULL)
+    // Decodes to: seq_profile 0, still_picture 0, reduced_still_picture_header 0,
+    // max_frame_width_minus_1 255, max_frame_height_minus_1 255, enable_superres 0,
+    // high_bitdepth 0, mono_chrome 0, color_description_present_flag 1,
+    // color_primaries 1, transfer_characteristics 13, matrix_coefficients 6,
+    // color_range 1. Agrees with every check.
     const std::vector<BYTE> bt601 = {0x12, 0x00, 0x0A, 0x0E, 0x00, 0x00, 0x00, 0x03, 0xBF,
                                      0xFF, 0xFB, 0xFF, 0xF3, 0x20, 0x21, 0xA0, 0xD0, 0x80};
     IFE_CHECK(static_cast<bool>(check(bt601)));
-    // The same input, --limit=1 and no colour flags: a reduced still-picture
-    // header with no colour description.
+    // aomenc --obu --limit=1 -o plain.obu in.y4m   (the same input, no colour flags)
+    // Decodes to: seq_profile 0, still_picture 1, reduced_still_picture_header 1,
+    // 255 x 255 maximum frame minus 1, high_bitdepth 0, mono_chrome 0,
+    // color_description_present_flag 0 (so matrix_coefficients is not coded).
     const std::vector<BYTE> plain = {0x12, 0x00, 0x0A, 0x07, 0x18, 0x1D, 0xFF,
                                      0xFF, 0xFB, 0x10, 0x80};
-    IFE_CHECK(refuses(check(plain), "color_description_present_flag", 0));
-    // 4:4:4 input, --limit=1 --profile=1 --i444 --matrix-coefficients=bt601:
-    // seq_profile 1 with the BT.601 matrix, written at studio swing.
+    IFE_CHECK(refuses(check(plain), "color_description_present_flag", 0, ENCODING));
+    // aomenc --obu --limit=1 --profile=1 --i444 --matrix-coefficients=bt601
+    //   -o one444.obu in444.y4m   (4:4:4, no XCOLORRANGE)
+    // Decodes to: seq_profile 1, still_picture 1, reduced_still_picture_header 1,
+    // 255 x 255 maximum frame minus 1, high_bitdepth 0, color_description_present_flag 1,
+    // color_primaries 2, transfer_characteristics 2, matrix_coefficients 6,
+    // color_range 0 (studio swing).
     const std::vector<BYTE> studio = {0x12, 0x00, 0x0A, 0x09, 0x38, 0x1D, 0xFF,
                                       0xFF, 0xFB, 0x40, 0x80, 0x81, 0x84};
-    IFE_CHECK(refuses(check(studio), "color_range", 0));
+    IFE_CHECK(refuses(check(studio), "color_range", 0, ENCODING));
+    // A still picture is one coded frame: it holds one focal plane.
 }
 
-/// Each rule of D31, broken alone, names its field and the value found.
-void test_each_rule_names_its_field() {
+/// Each disagreement, alone, names the IFE field, the AV1 syntax element and
+/// the value found.
+void test_each_disagreement_names_its_fields() {
     struct Case {
         SequenceHeader header;
+        const char*    block;
         const char*    field;
         std::uint64_t  found;
     };
     std::vector<Case> cases;
-    auto add = [&cases](const char* field, std::uint64_t found, auto&& mutate) {
+    auto add = [&cases](const char* block, const char* field, std::uint64_t found, auto&& mutate) {
         SequenceHeader s;
         mutate(s);
-        cases.push_back({s, field, found});
+        cases.push_back({s, block, field, found});
     };
-    add("seq_profile", 2, [](SequenceHeader& s) { s.seq_profile = 2; });
-    add("high_bitdepth", 1, [](SequenceHeader& s) { s.high_bitdepth = 1; });
-    add("mono_chrome", 1, [](SequenceHeader& s) { s.mono_chrome = 1; });
-    add("color_description_present_flag", 0, [](SequenceHeader& s) { s.color_description_present = 0; });
-    add("matrix_coefficients", MC_BT_709, [](SequenceHeader& s) { s.matrix_coefficients = MC_BT_709; });
+    add(LENGTH, "max_frame_width_minus_1", 511, [](SequenceHeader& s) { s.frame_width = 512; });
+    add(LENGTH, "max_frame_height_minus_1", 127, [](SequenceHeader& s) { s.frame_height = 128; });
+    add(LENGTH, "enable_superres", 1, [](SequenceHeader& s) { s.enable_superres = 1; });
+    add(ENCODING, "seq_profile", 2, [](SequenceHeader& s) { s.seq_profile = 2; });
+    add(ENCODING, "high_bitdepth", 1, [](SequenceHeader& s) { s.high_bitdepth = 1; });
+    add(ENCODING, "mono_chrome", 1, [](SequenceHeader& s) { s.mono_chrome = 1; });
+    add(ENCODING, "color_description_present_flag", 0, [](SequenceHeader& s) { s.color_description_present = 0; });
+    add(ENCODING, "matrix_coefficients", MC_BT_709, [](SequenceHeader& s) { s.matrix_coefficients = MC_BT_709; });
     // BT.709 primaries, sRGB transfer and the identity matrix: color_range is
     // not coded (section 5.5.2), and the matrix fails first.
-    add("matrix_coefficients", MC_IDENTITY, [](SequenceHeader& s) { s.matrix_coefficients = MC_IDENTITY; });
-    add("color_range", 0, [](SequenceHeader& s) { s.color_range = 0; });
-    add("max_frame_width_minus_1", 511, [](SequenceHeader& s) { s.frame_width = 512; });
-    add("max_frame_height_minus_1", 127, [](SequenceHeader& s) { s.frame_height = 128; });
-    add("enable_superres", 1, [](SequenceHeader& s) { s.enable_superres = 1; });
-    add("film_grain_params_present", 1, [](SequenceHeader& s) { s.film_grain_params_present = 1; });
-    add("operating_points_cnt_minus_1", 1, [](SequenceHeader& s) { s.operating_points_cnt_minus_1 = 1; });
-    add("operating_point_idc", 0x101, [](SequenceHeader& s) { s.operating_point_idc = 0x101; });
+    add(ENCODING, "matrix_coefficients", MC_IDENTITY, [](SequenceHeader& s) { s.matrix_coefficients = MC_IDENTITY; });
+    add(ENCODING, "color_range", 0, [](SequenceHeader& s) { s.color_range = 0; });
     for (const Case& c : cases)
-        IFE_CHECK(refuses(check(tile_stream(c.header)), c.field, c.found));
+        IFE_CHECK(refuses(check(tile_stream(c.header)), c.field, c.found, c.block));
 
     // The frame size is checked against the slide's TILE_LENGTH.
-    IFE_CHECK(refuses(check(tile_stream({}), 512), "max_frame_width_minus_1", TILE - 1));
+    IFE_CHECK(refuses(check(tile_stream({}), 512), "max_frame_width_minus_1", TILE - 1, LENGTH));
 }
 
-/// The OBU framing and every bound on a length the stream claims.
-void test_framing_and_bounds() {
+/// still_picture means one coded frame (AV1 section 6.4.1), which cannot hold
+/// more than one focal plane: a tile whose plane count is above 1 must not be
+/// one, whether the header is in the full or the reduced form.
+void test_plane_count() {
+    SequenceHeader still;
+    still.still_picture = 1;
+    SequenceHeader reduced;
+    reduced.still_picture = 1;
+    reduced.reduced_still_picture_header = 1;
+    for (const SequenceHeader& s : {still, reduced}) {
+        IFE_CHECK(static_cast<bool>(check(tile_stream(s), TILE, 1)));
+        IFE_CHECK(static_cast<bool>(check(tile_stream(s), TILE, 0)));   // zero means one plane
+        IFE_CHECK(refuses(check(tile_stream(s), TILE, 2), "still_picture", 1, PLANES));
+        IFE_CHECK(refuses(check(tile_stream(s), TILE, 7), "still_picture", 1, PLANES));
+    }
+    IFE_CHECK(static_cast<bool>(check(tile_stream({}), TILE, 7)));   // a sequence of frames
+}
+
+/// Rules about the stream alone, with no IFE field behind them, are the
+/// stream's own business and are not checked.
+void test_stream_only_rules_are_not_checked() {
+    SequenceHeader grain;
+    grain.film_grain_params_present = 1;
+    SequenceHeader points;
+    points.operating_points_cnt_minus_1 = 1;
+    SequenceHeader idc;
+    idc.operating_point_idc = 0x101;
+    for (const SequenceHeader& s : {grain, points, idc})
+        IFE_CHECK(static_cast<bool>(check(tile_stream(s))));
+
+    // Any OBU may come before the sequence header, which may carry an
+    // extension byte: the walk skips both.
+    const std::vector<BYTE> header = obu(OBU_SEQUENCE_HEADER, sequence_header_payload({}));
+    std::vector<BYTE> metadata_first = obu(OBU_METADATA, {0x01, 0x80});
+    metadata_first.insert(metadata_first.end(), header.begin(), header.end());
+    IFE_CHECK(static_cast<bool>(check(metadata_first)));
+    IFE_CHECK(static_cast<bool>(check(obu(OBU_SEQUENCE_HEADER, sequence_header_payload({}), true))));
+}
+
+/// What the walk to the sequence header needs: every length the stream
+/// claims is bounded, and an OBU it cannot step over is refused.
+void test_walk_bounds() {
     const std::vector<BYTE> header = obu(OBU_SEQUENCE_HEADER, sequence_header_payload({}));
 
     std::vector<BYTE> forbidden = header;
     forbidden[0] |= 0x80;
-    IFE_CHECK(refuses(check(forbidden), "obu_forbidden_bit", 1));
+    IFE_CHECK(refuses(check(forbidden), "obu_forbidden_bit", 1, STREAM));
 
     std::vector<BYTE> no_size = header;
     no_size[0] &= static_cast<BYTE>(~0x02u);
-    IFE_CHECK(refuses(check(no_size), "obu_has_size_field", 0));
-
-    // A sequence header is not layer-specific: no extension byte (section 6.2.2).
-    IFE_CHECK(refuses(check(obu(OBU_SEQUENCE_HEADER, sequence_header_payload({}), true)),
-                      "obu_extension_flag", 1));
-
-    // An OBU other than a temporal delimiter, padding or a reserved type
-    // before the sequence header.
-    std::vector<BYTE> metadata_first = obu(OBU_METADATA, {0x01, 0x80});
-    metadata_first.insert(metadata_first.end(), header.begin(), header.end());
-    IFE_CHECK(refuses(check(metadata_first), "obu_type", OBU_METADATA));
+    IFE_CHECK(refuses(check(no_size), "obu_has_size_field", 0, STREAM));
 
     // obu_size past the bytes that remain.
     std::vector<BYTE> overrun = header;
     overrun[1] = static_cast<BYTE>(header.size());   // one more than the payload holds
-    IFE_CHECK(refuses(check(overrun), "obu_size", header.size()));
+    IFE_CHECK(refuses(check(overrun), "obu_size", header.size(), STREAM));
 
     // leb128: above 2^32 - 1, and a continuation bit on the eighth byte.
     const std::vector<BYTE> wide = {0x0A, 0x80, 0x80, 0x80, 0x80, 0x10};   // 2^32
-    IFE_CHECK(refuses(check(wide), "obu_size", std::uint64_t{1} << 32));
+    IFE_CHECK(refuses(check(wide), "obu_size", std::uint64_t{1} << 32, STREAM));
     const std::vector<BYTE> long_leb = {0x0A, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00};
-    IFE_CHECK(refuses(check(long_leb), "leb128_byte", 0x80));
+    IFE_CHECK(refuses(check(long_leb), "leb128_byte", 0x80, STREAM));
 
-    // A stream with no OBU at all, and one holding only a temporal delimiter.
-    IFE_CHECK(refuses(check({}), "obu_header", 0));
-    IFE_CHECK(refuses(check(obu(OBU_TEMPORAL_DELIMITER, {})), "obu_header", 2));
+    // A stream with no OBU at all, and one holding only a temporal delimiter
+    // and padding: neither has a sequence header to read.
+    IFE_CHECK(refuses(check({}), "sequence_header_obu", 0, STREAM));
+    std::vector<BYTE> headless = obu(OBU_TEMPORAL_DELIMITER, {});
+    const std::vector<BYTE> padding = obu(OBU_PADDING, {0x80});
+    headless.insert(headless.end(), padding.begin(), padding.end());
+    IFE_CHECK(refuses(check(headless), "sequence_header_obu", headless.size(), STREAM));
 }
 
 /// Every prefix of a conformant stream that stops before the sequence
@@ -471,8 +526,11 @@ void test_truncation_at_every_byte() {
     IFE_CHECK(static_cast<bool>(check(whole)));
 
     // A header whose obu_size agrees with a payload cut short: the syntax
-    // runs out of bits inside the OBU. trailing_bits() fills at most the last
-    // byte, so every payload two or more bytes short loses a coded field.
+    // runs out of bits inside the OBU. The read stops at color_range, so the
+    // last three coded bits (chroma_sample_position is two of them, then
+    // separate_uv_delta_q and film_grain_params_present) and the trailing
+    // bits may go unread; every payload cut inside the bytes before them
+    // loses a field the checks need.
     const std::vector<BYTE> payload = sequence_header_payload(s);
     for (std::size_t n = 0; n + 2 <= payload.size(); ++n) {
         const std::vector<BYTE> cut(payload.begin(), payload.begin() + static_cast<std::ptrdiff_t>(n));
@@ -512,7 +570,7 @@ void test_other_encodings_are_not_parsed() {
     const std::vector<BYTE> filler(24, 0xCD);
     for (const auto encoding : {k::TileEncodings::TILE_ENCODING_JPEG, k::TileEncodings::TILE_ENCODING_UASTC,
                                 k::TileEncodings::TILE_ENCODING_XUASTC, k::TileEncodings::TILE_ENCODING_IRIS})
-        IFE_CHECK(static_cast<bool>(check(filler, TILE, encoding)));
+        IFE_CHECK(static_cast<bool>(check(filler, TILE, 1, encoding)));
     IFE_CHECK(!check(filler));
 }
 
@@ -553,6 +611,36 @@ std::vector<BYTE> av1_slide(const SequenceHeader& second, std::uint16_t length =
     return {builder->base(), builder->base() + builder.head()};
 }
 
+/// A one-layer slide of Z-stacked AV1 tiles: three planes at most, one tile,
+/// framed with @p planes, carrying @p header.
+std::vector<BYTE> zstack_slide(const SequenceHeader& header, std::uint16_t planes) {
+    BuilderTileTableInfo grid;
+    grid.encoding      = static_cast<Encoding>(k::TileEncodings::TILE_ENCODING_AV1);
+    grid.format        = FORMAT_R8G8B8;
+    grid.extent.width  = TILE;
+    grid.extent.height = TILE;
+    grid.extent.layers = {LayerExtent{.xTiles = 1, .yTiles = 1, .scale = 1.0f}};
+    grid.planes        = {3};
+    const Builder builder = Builder::create({.capacity = Size{1} << 20});
+    builder.set_tile_table(grid);
+    const std::vector<BYTE> stream = tile_stream(header);
+    builder.append_tile(0, 0, stream.data(), stream.size(), planes);
+    const Offset tiles_at   = builder->append(b::TileOffsetsCreateInfo{.entries = builder.tile_offsets()});
+    const Offset extents_at = builder->append(b::LayerExtentsCreateInfo{
+        .entries = {{.X_TILES = 1, .Y_TILES = 1, .SCALE = 1.0f, .Z_PLANES = 3}}});
+    const Offset table_at = builder->append(b::TileTableCreateInfo{
+        .ENCODING             = k::TileEncodings::TILE_ENCODING_AV1,
+        .FORMAT               = static_cast<k::PixelFormats>(grid.format),
+        .TILE_OFFSETS_OFFSET  = tiles_at,
+        .LAYER_EXTENTS_OFFSET = extents_at,
+        .X_EXTENT             = grid.extent.width,
+        .Y_EXTENT             = grid.extent.height,
+        .TILE_LENGTH          = TILE});
+    const Offset metadata_at = builder->append(b::MetadataCreateInfo{.MICRONS_PIXEL = 0.25f, .MICRONS_PLANE = 1.0f});
+    builder.finalize({.tileTable = table_at, .metadata = metadata_at});
+    return {builder->base(), builder->base() + builder.head()};
+}
+
 void test_validate_file_structure() {
     const std::vector<BYTE> clean = av1_slide({});
     IFE_CHECK(validate_file_structure({clean.data(), clean.size()}).succeeded());
@@ -577,6 +665,19 @@ void test_validate_file_structure() {
     large.frame_width = large.frame_height = 512;
     const std::vector<BYTE> matched = av1_slide(large, 512);
     IFE_CHECK(validate_file_structure({matched.data(), matched.size()}).succeeded());
+
+    // A still picture on a tile of three planes: loud, naming the layer, the
+    // tile, its plane count and the flag. One plane on the same layer passes.
+    SequenceHeader still;
+    still.still_picture = 1;
+    const std::vector<BYTE> stacked = zstack_slide(still, 3);
+    const FileAccessInfo    stacked_at{stacked.data(), stacked.size()};
+    for (const char* named : {"Layer 0, tile 0", "3 planes", "still_picture 1"})
+        IFE_CHECK(fails_with(validate_file_structure(stacked_at), FileError::CONFORMANCE, named));
+    const std::vector<BYTE> single = zstack_slide(still, 1);
+    IFE_CHECK(validate_file_structure({single.data(), single.size()}).succeeded());
+    const std::vector<BYTE> sequence = zstack_slide({}, 3);
+    IFE_CHECK(validate_file_structure({sequence.data(), sequence.size()}).succeeded());
 }
 
 }  // namespace
@@ -584,8 +685,10 @@ void test_validate_file_structure() {
 int main() {
     test_conformant_headers_pass();
     test_headers_an_encoder_wrote();
-    test_each_rule_names_its_field();
-    test_framing_and_bounds();
+    test_each_disagreement_names_its_fields();
+    test_plane_count();
+    test_stream_only_rules_are_not_checked();
+    test_walk_bounds();
     test_truncation_at_every_byte();
     test_garbage_returns();
     test_other_encodings_are_not_parsed();
