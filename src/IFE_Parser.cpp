@@ -8,7 +8,7 @@
 #include "IFE_Parser.hpp"
 #include "IFE_Failure.hpp"      // Failure, boundary
 #include "IFE_Primitives.hpp"   // tile_frame_error
-#include "IrisMemory.hpp"       // priv: Iris::Memory, for Parser::open
+#include "IrisMemory.hpp"       // priv: Iris::Memory, for create_parser
 
 #include <algorithm>
 #include <string>
@@ -24,7 +24,8 @@ namespace {
 /// boundary with its code and place.
 const Abstraction::File& lifted(const Parser_t& parser) {
     const Abstraction::File* file = nullptr;
-    if (const Result result = parser.abstraction(file); result.failed()) throw Failure(result);
+    const Result result = parser.abstraction(file);
+    if (result.failed()) throw Failure(result);
     return *file;
 }
 
@@ -66,8 +67,8 @@ Result Parser_t::abstraction(const Abstraction::File*& file) const noexcept
         // call rather than handing back a half-lifted structure.
         std::call_once(m_lifted, [this] {
             Abstraction::File lift;
-            if (const Result result = ::Iris::File::abstract_file_structure(m_info, lift); result.failed())
-                throw Failure(result);
+            const Result result = ::Iris::File::abstract_file_structure(m_info, lift);
+            if (result.failed()) throw Failure(result);
             m_abstraction = std::move(lift);
         });
         file = &m_abstraction;
@@ -135,14 +136,14 @@ Result Parser_t::image(const std::string& label, std::span<const BYTE>& stream) 
 Parser::Parser(const FileAccessInfo& info)
     : Base(std::make_shared<Parser_t>(info)) {}
 
-Result Parser::open(const std::filesystem::path& path, Parser& parser) noexcept
+Result create_parser(const ParserDesc& desc, Parser& parser) noexcept
 {
-    return boundary("Parser::open", [&] {
+    return boundary("create_parser", [&] {
         auto memory = std::make_shared<Iris::Memory>();
         const Iris::Result made = Iris::create_memory(
-            Iris::MemoryCreateInfo{.filepath = path, .read_only = true}, *memory);
+            Iris::MemoryCreateInfo{.filepath = desc.filepath, .read_only = true}, *memory);
         if (made.failed())
-            throw Failure(FileError::NOT_MAPPED, "IFE Parser: could not open " + path.string() + " (" +
+            throw Failure(FileError::NOT_MAPPED, "IFE Parser: could not open " + desc.filepath.string() + " (" +
                           made.message + ")");
         // A read-only arena's capacity is the file's own size.
         const FileAccessInfo info{memory->base(), memory->capacity()};

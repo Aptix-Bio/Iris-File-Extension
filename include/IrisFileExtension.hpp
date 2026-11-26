@@ -141,6 +141,7 @@ enum class FileError : std::uint32_t {
     NOT_MAPPED,             ///< the file could not be mapped (missing, unreadable or empty)
     TOO_LARGE,              ///< an attribute structure expands past the nodes a reader will lift
     UNEXPECTED_EXCEPTION,   ///< an exception IFE does not throw reached a public function
+    SYSTEM_ERROR,           ///< the operating system refused a resource (a thread that would not start)
 };
 
 /// Access to a mapped Iris file: the identity every file-level operation takes.
@@ -214,7 +215,7 @@ class Parser_t;   ///< the read BODY — defined in "IFE_Parser.hpp"
  * (generate_file_map) lives. This mirrors the write handle `Builder` beside it
  * and FastFHIR's own `Parser` / `Builder` pair.
  *
- * Two ways to bind one. `Parser::open(path, parser)` maps the file read-only and OWNS
+ * Two ways to bind one. `create_parser({.filepath = path}, parser)` maps the file read-only and OWNS
  * the mapping: it stays mapped for as long as any copy of the handle lives, so
  * a reader that keeps the Parser keeps its bytes. `Parser(FileAccessInfo)`
  * BORROWS a mapping the caller owns, exactly as `FileAccessInfo` documents.
@@ -242,13 +243,6 @@ public:
     /// Bind to a mapping the caller owns (borrowed). Defined in the cpp (it
     /// needs the complete body).
     explicit Parser(const FileAccessInfo& info);
-
-    /// Map @p path read-only and bind @p parser to it; the parser owns the
-    /// mapping. The file is not validated here — `validate_file_structure()`
-    /// does that, and `abstraction()` checks what it lifts. A file that cannot
-    /// be mapped (missing, unreadable, or empty) is NOT_MAPPED, naming the
-    /// path, and leaves @p parser as it was.
-    [[nodiscard]] static Result open(const std::filesystem::path& path, Parser& parser) noexcept;
 
     /// Quick header check (magic, recovery tag, header fits). Does not validate.
     Result is_iris_slide_file() const noexcept;
@@ -291,6 +285,19 @@ public:
     /// Bytes available at @ref data.
     Size size() const noexcept;
 };
+
+/// What `create_parser` maps: a slide file, opened read-only, whose mapping
+/// the parser then owns.
+struct IFE_EXPORT ParserDesc {
+    std::filesystem::path filepath;   ///< the slide to map
+};
+
+/// Map @p desc's file read-only and bind @p parser to it; the parser owns the
+/// mapping for as long as any copy of the handle lives. The file is not
+/// validated here — `validate_file_structure()` does that, and `abstraction()`
+/// checks what it lifts. A file that cannot be mapped (missing, unreadable, or
+/// empty) is NOT_MAPPED, naming the path, and leaves @p parser as it was.
+[[nodiscard]] Result IFE_EXPORT create_parser(const ParserDesc& desc, Parser& parser) noexcept;
 
 // MARK: - WRITE (BUILDER)
 

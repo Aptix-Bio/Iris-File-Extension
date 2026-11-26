@@ -367,7 +367,7 @@ Parser Builder_t::query() const
     // the Parser is a read lens that SHARES the memory handle, so a read of
     // the arena is never re-implemented here. Meaningful once the stream has a
     // header; a file-backed `finalize` releases the mapping, after which a
-    // reader opens the sealed file with Parser::open.
+    // reader opens the sealed file with create_parser.
     auto owner = std::make_shared<Iris::Memory>(m_memory);
     return Parser(std::make_shared<Parser_t>(
         FileAccessInfo{m_memory.base(), m_memory.capacity()},

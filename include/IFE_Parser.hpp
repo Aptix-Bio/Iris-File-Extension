@@ -40,7 +40,7 @@ namespace Iris::File {
 /**
  * @brief The read body behind @ref Parser. Internal tier.
  *
- * Holds the mapping — borrowed, or owned when made by `Parser::open` — and
+ * Holds the mapping — borrowed, or owned when made by `create_parser` — and
  * forwards to the read entry points. Nothing is lifted at construction:
  * binding a `Parser` to a huge slide is nearly free, and the structure is
  * lifted once, on first use of `abstraction()`.
@@ -69,7 +69,7 @@ public:
 
     /// The mapping this parser reads.
     [[nodiscard]] const FileAccessInfo& info() const noexcept { return m_info; }
-    /// Whether this parser owns its mapping (made by `Parser::open`).
+    /// Whether this parser owns its mapping (made by `create_parser`).
     [[nodiscard]] bool owns_mapping() const noexcept { return m_owner != nullptr; }
     /// Pointer to the first mapped byte.
     [[nodiscard]] const BYTE* data() const noexcept { return m_info.file_ptr; }

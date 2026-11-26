@@ -103,7 +103,7 @@ Every C++ example on this page is compiled against the real headers by the `ife_
 > [!WARNING]
 > When reading Iris slide files, you should **always validate** a slide before attempting to read data from it.
 
-`Parser::open` maps the file read-only and keeps it mapped for as long as any copy of the handle lives, so a reader that keeps the Parser keeps its bytes. Every read call is `noexcept` and returns an `Iris::Result`: no exception crosses the API. A call that produces something writes it through its last argument, only on success; on failure the `Result` carries a `FileError` (`result.code_as<FileError>()`) and a `message` naming the offending value.
+`create_parser` maps the file read-only and keeps it mapped for as long as any copy of the handle lives, so a reader that keeps the Parser keeps its bytes. Every read call is `noexcept` and returns an `Iris::Result`: no exception crosses the API. A call that produces something writes it through its last argument, only on success; on failure the `Result` carries a `FileError` (`result.code_as<FileError>()`) and a `message` naming the offending value.
 <!-- ife-compile: fragment -->
 ```cpp
 #include "IrisFileExtension.hpp"
@@ -113,7 +113,8 @@ using namespace Iris;
 using namespace Iris::File;
 
 Parser parser;
-if (Result opened = Parser::open(path, parser); opened.failed()) {   // NOT_MAPPED, naming the path
+const Result opened = create_parser({.filepath = path}, parser);   // NOT_MAPPED, naming the path
+if (opened.failed()) {
     std::printf("%s\n", opened.message.c_str());
     return;
 }
@@ -122,9 +123,11 @@ if (Result valid = parser.validate_file_structure(); valid.failed()) {
     return;
 }
 const Abstraction::File* slide = nullptr;            // lifted once, then kept
-if (Result lifted = parser.abstraction(slide); lifted.failed()) return;
+const Result lifted = parser.abstraction(slide);
+if (lifted.failed()) return;
 std::span<const BYTE> stream;                        // zero-copy; empty = no tile there
-if (Result read = parser.tile(layer, tile, stream); read.failed()) return;   // NO_SUCH_TILE
+const Result read = parser.tile(layer, tile, stream);   // NO_SUCH_TILE for a tile the slide lacks
+if (read.failed()) return;
 // ...decompress stream.data(), stream.size() with the JPEG or AV1 decoder for slide->tileTable.encoding
 ```
 `validate_file_structure` deep-validates the offset graph and bounds-checks every tile entry. `abstraction()` and `abstract_file_structure` check every block they read — both witnesses, and every length the block declares — and return a failure `Result` on a structurally damaged file rather than reading it, naming the block, its byte and the value it holds. They never hand out values they could not verify, and never repair; to reopen a damaged file, see [Recovering a Damaged File](#recovering-a-damaged-file). `abstraction()` writes a pointer to the Parser's one cached lift, so nothing is copied, and the pointer is valid while the Parser is. A caller that maps the file itself can bind a Parser to that mapping instead — `Parser({ptr, size})` borrows it — or call the free functions `validate_file_structure` / `abstract_file_structure(info, file)` directly.
@@ -243,7 +246,8 @@ for (uint32_t i = 0; offsets && i < offsets.count(); ++i) {
 using namespace Iris::File;
 
 Abstraction::FileMap map;
-if (Result mapped = generate_file_map({ptr, size}, map); mapped.failed()) return;
+const Result mapped = generate_file_map({ptr, size}, map);
+if (mapped.failed()) return;
 const uint32_t version = versioned_root(ptr, size).__version;
 
 for (auto it = map.lower_bound(write_location); it != map.end(); ++it) {

@@ -23,6 +23,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 #include "IrisFileExtension.hpp"   // FileError, Iris::Result
@@ -59,8 +60,9 @@ private:
  *
  * Success when the body returns; otherwise the failure it threw, caught by
  * type: a `Failure` keeps its code and place; `std::bad_alloc` is
- * OUT_OF_MEMORY; any other exception is UNEXPECTED_EXCEPTION naming its
- * message and the function. The body writes its outputs only once it can no
+ * OUT_OF_MEMORY; `std::system_error` (a thread the system would not start) is
+ * SYSTEM_ERROR naming the system's message; any other exception is
+ * UNEXPECTED_EXCEPTION naming its message and the function. The body writes its outputs only once it can no
  * longer fail, so a failed call leaves them as the caller had them.
  */
 template <std::invocable Body>
@@ -73,6 +75,9 @@ Result boundary(std::string_view name, Body&& body,
         return thrown.result();
     } catch (const std::bad_alloc&) {
         return failure(FileError::OUT_OF_MEMORY, std::string(name) + " ran out of memory", where);
+    } catch (const std::system_error& refused) {
+        return failure(FileError::SYSTEM_ERROR, std::string(name) + ": the operating system refused it (" +
+                       refused.code().message() + ")", where);
     } catch (const std::exception& error) {
         return failure(FileError::UNEXPECTED_EXCEPTION,
                        std::string(name) + " caught an unexpected exception: " + error.what(), where);

@@ -208,7 +208,8 @@ struct IFE_EXPORT FileMap : public std::map<Offset, FileMapEntry> {
 
 /// The recovery census. Every call is `noexcept` and returns a `Result`,
 /// writing what it produces through its argument only on success; a failure
-/// is an allocation (OUT_OF_MEMORY) or a worker thread that could not start.
+/// is an allocation (OUT_OF_MEMORY) or a worker thread that could not start
+/// (SYSTEM_ERROR).
 class IFE_EXPORT Recovery {
 public:
     /// Reads nothing at construction. Every later read is bounded by the file.

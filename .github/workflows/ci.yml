@@ -80,6 +80,8 @@ jobs:
         run: PYTHONHASHSEED=1 python3 tests/generator/test_determinism.py
       - name: generate_IFE.py runs from any directory; -d names the root
         run: python3 tests/generator/test_directory_flag.py
+      - name: The downstream verdict fails a change green only on Iris-Slide's paired branch
+        run: cmake -P cmake/tests/downstream_iris_slide_test.cmake
       - name: Retired enum members are validated, emitted and off the wire
         run: python3 tests/generator/test_deprecated.py
       # Runs here rather than in the MSVC job so a Windows-only defect fails
@@ -200,35 +202,40 @@ jobs:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@v7
-      # Iris-Slide takes IFE as a vcpkg port pinned by commit, so this job
-      # builds it through Iris-Slide's own scripts/local_ports.cmake, whose
-      # overlay port's source is THIS checkout: the exact state the PR would
-      # ship. Until R-8 (2026-11-25) it passed a FETCHCONTENT_SOURCE_DIR
-      # override, which Iris-Slide's configure reported unused, and built the
-      # pinned commit instead. Iris-Slide is cloned at the branch named like
-      # this pull request's head when it has one (a coordinated change, as
-      # Iris-Headers' downstream verdict pairs them), else main; the owner's
-      # fork is preferred, so a fork tests its own consumer. The script holds
-      # the logic (cmake/downstream_iris_slide.cmake); the branch name is text
-      # the author chose, so it reaches it through env:.
-      # Build-only, matching Iris-Slide's own CI (which runs no ctest). nasm
-      # (for the aom port) and pkg-config are the system tools Iris-Slide's
+      # The base, for the control builds: a red build against the change is
+      # this change's fault only if the same build is green against the base.
+      - name: The base (control)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: downstream-base
+          ref: ${{ github.event.pull_request.base.sha || github.event.before }}
+          persist-credentials: false
+      # Iris-Slide takes IFE as a vcpkg port pinned by commit, so each build
+      # goes through Iris-Slide's own scripts/local_ports.cmake, whose overlay
+      # port's source is the IFE checkout named. Until R-8 (2026-11-25) this
+      # job passed a FETCHCONTENT_SOURCE_DIR override, which Iris-Slide's
+      # configure reported unused, and built the pinned commit instead.
+      # Iris-Slide is built at the branch named like this pull request's head
+      # when it has one, else main; after a green paired build, Iris-Slide
+      # main is built too, and a change green only on the paired branch fails
+      # as a coordinated change until both merge, as Iris-Headers' downstream
+      # verdict judges its consumers. The verdict is the script's
+      # (cmake/downstream_iris_slide.cmake, tested by
+      # cmake/tests/downstream_iris_slide_test.cmake in the spec job); the
+      # branch name is text the author chose, so it reaches it through env:.
+      # Build-only, matching Iris-Slide's own CI. nasm (for the aom port),
+      # Ninja and pkg-config are the system tools Iris-Slide's
       # .github/workflows/_build.yml installs because vcpkg cannot fetch them
-      # on Blacksmith's Linux runners.
-      - name: Configure Jpeg-Turbo PPA
-        run: |
-          sudo wget -q https://packagecloud.io/dcommander/libjpeg-turbo/gpgkey -O /etc/apt/trusted.gpg.d/libjpeg-turbo
-          sudo gpg --dearmor /etc/apt/trusted.gpg.d/libjpeg-turbo
-          sudo wget https://raw.githubusercontent.com/libjpeg-turbo/repo/main/libjpeg-turbo.list -O /etc/apt/sources.list.d/libjpeg-turbo.list
-          sudo apt update
-      - name: Fetch Dependencies
-        run: sudo apt install libhwy-dev libjpeg-turbo-official libavif-dev libpng-dev zlib1g-dev openslide-tools python3-dev meson ninja-build nasm pkg-config -y
-      - name: Iris-Slide (its paired branch, else main) built against this checkout
+      # on Blacksmith's Linux runners; vcpkg builds every library.
+      - name: The system tools Iris-Slide's vcpkg ports need
+        run: sudo apt-get update --quiet && sudo apt-get install --yes --no-install-recommends nasm ninja-build pkg-config
+      - name: Iris-Slide (its paired branch, then main) built against this change
         env:
           HEAD_REF: ${{ github.head_ref }}
           OWNER: ${{ github.repository_owner }}
+          GH_TOKEN: ${{ github.token }}
         working-directory: ..
-        run: cmake -DIFE="$GITHUB_WORKSPACE" -P "$GITHUB_WORKSPACE/cmake/downstream_iris_slide.cmake"
+        run: cmake -DCHANGE="$GITHUB_WORKSPACE" -DBASE="$GITHUB_WORKSPACE/downstream-base" -P "$GITHUB_WORKSPACE/cmake/downstream_iris_slide.cmake"
 
   sanitizers:
     name: address and undefined behaviour

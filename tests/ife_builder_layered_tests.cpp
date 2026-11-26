@@ -83,7 +83,8 @@ bool throws(const std::function<void()>& fn) {
 /// its message (the read path returns a Result, R-8).
 Abstraction::File lifted(const FileAccessInfo& at) {
     Abstraction::File file;
-    if (const Result result = abstract_file_structure(at, file); result.failed()) {
+    const Result result = abstract_file_structure(at, file);
+    if (result.failed()) {
         std::fprintf(stderr, "FAIL: abstract_file_structure: %s\n", result.message.c_str());
         ++g_failures;
     }
@@ -94,7 +95,8 @@ Abstraction::File lifted(const FileAccessInfo& at) {
 const Abstraction::File& parsed(const Parser& parser) {
     static const Abstraction::File none;
     const Abstraction::File* file = &none;
-    if (const Result result = parser.abstraction(file); result.failed()) {
+    const Result result = parser.abstraction(file);
+    if (result.failed()) {
         std::fprintf(stderr, "FAIL: Parser::abstraction: %s\n", result.message.c_str());
         ++g_failures;
     }

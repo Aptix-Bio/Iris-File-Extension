@@ -127,8 +127,8 @@ std::set<std::string> walk(const ife_corpus::Fixture& fixture,
     // carries no recovery tag and is addressed backward from its stream); the
     // recovery census that used to be unioned in here is being rebuilt.
     ::Iris::File::Abstraction::FileMap map;
-    if (const Iris::Result mapped = ::Iris::File::generate_file_map({bytes.data(), bytes.size()}, map);
-        mapped.failed()) {
+    const Iris::Result mapped = ::Iris::File::generate_file_map({bytes.data(), bytes.size()}, map);
+    if (mapped.failed()) {
         std::fprintf(stderr, "FAIL: %s: the file map failed: %s\n", fixture.name, mapped.message.c_str());
         ++g_failures;
         return observed;
