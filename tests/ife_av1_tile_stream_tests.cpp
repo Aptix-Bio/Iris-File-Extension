@@ -431,6 +431,49 @@ void test_each_disagreement_names_its_fields() {
     IFE_CHECK(refuses(check(tile_stream({}), 512), "max_frame_width_minus_1", TILE - 1, AGAINST_TILE_LENGTH));
 }
 
+// The section sign, as UTF-8 bytes on every compiler: a literal "\u00A7" would
+// follow MSVC's execution character set, and the split keeps the hex escape
+// from swallowing the section number after it.
+const std::string SECTION = "\xC2\xA7";
+
+/// Every diagnostic is generated from its external_check entry, in one form:
+/// `OFFSET <at>: AV1 <element> is <found>; <IFE field> requires <expected>
+/// (AV1 section, clause)`, the IFE field followed by its value where the
+/// check is given one. One exact string per relation, and one for a stream
+/// the reader cannot walk.
+void test_messages_are_generated() {
+    const auto exact = [](const std::string& expected) {
+        const bool same = g_diagnostic == expected;
+        if (!same) std::fprintf(stderr, "  expected \"%s\"\n       got \"%s\"\n", expected.c_str(), g_diagnostic.c_str());
+        return same;
+    };
+    SequenceHeader bt709;   // equals
+    bt709.matrix_coefficients = MC_BT_709;
+    IFE_CHECK(!check(tile_stream(bt709)));
+    IFE_CHECK(exact("OFFSET 0: AV1 matrix_coefficients is 1; TILE_TABLE.ENCODING requires 6 (AV1 " + SECTION +
+                    "5.5.2, <<ife-tile-av1>>)"));
+    SequenceHeader professional;   // one_of
+    professional.seq_profile = 2;
+    IFE_CHECK(!check(tile_stream(professional)));
+    IFE_CHECK(exact("OFFSET 0: AV1 seq_profile is 2; TILE_TABLE.ENCODING requires 0 or 1 (AV1 " + SECTION +
+                    "5.5.1, <<ife-tile-av1>>)"));
+    IFE_CHECK(!check(tile_stream({}), 512));   // plus_one_equals
+    IFE_CHECK(exact("OFFSET 0: AV1 max_frame_width_minus_1 is 255; TILE_TABLE.TILE_LENGTH 512 requires 511 (AV1 " +
+                    SECTION + "5.5.1, <<ife-tile-av1>>)"));
+    SequenceHeader still;   // equals_when_ife_above
+    still.still_picture = 1;
+    IFE_CHECK(!check(tile_stream(still), TILE, 2));
+    IFE_CHECK(exact("OFFSET 0: AV1 still_picture is 1; TILE_PIXEL_DATA.Z_PLANES 2 requires 0 (AV1 " + SECTION +
+                    "5.5.1, <<ife-tile-av1>>)"));
+    // A stream the reader cannot walk, in the same form.
+    std::vector<BYTE> overrun = obu(OBU_SEQUENCE_HEADER, sequence_header_payload({}));
+    const std::size_t left = overrun.size() - 2;
+    overrun[1] = static_cast<BYTE>(left + 1);
+    IFE_CHECK(!check(overrun));
+    IFE_CHECK(exact("OFFSET 0: AV1 obu_size is " + std::to_string(left + 1) + "; TILE_PIXEL_DATA requires at most " +
+                    std::to_string(left) + ", the bytes left (AV1 " + SECTION + "5.3.1, <<ife-tile-av1>>)"));
+}
+
 /// still_picture means one coded frame (AV1 section 6.4.1), which cannot hold
 /// more than one focal plane: a tile whose plane count is above 1 must not be
 /// one, whether the header is in the full or the reduced form.
@@ -650,7 +693,7 @@ void test_validate_file_structure() {
     const std::vector<BYTE> wrong = av1_slide(bt709);
     const FileAccessInfo    at{wrong.data(), wrong.size()};
     IFE_CHECK(fails_with(validate_file_structure(at), FileError::CONFORMANCE, "Layer 0, tile 1"));
-    IFE_CHECK(fails_with(validate_file_structure(at), FileError::CONFORMANCE, "matrix_coefficients 1"));
+    IFE_CHECK(fails_with(validate_file_structure(at), FileError::CONFORMANCE, "AV1 matrix_coefficients is 1;"));
     // The read path is a lens over the bytes (D14) and never parses a tile
     // stream: a decoder refuses what it cannot convert.
     Abstraction::File file;
@@ -660,7 +703,7 @@ void test_validate_file_structure() {
     const SequenceHeader default_edge;   // 256 square, on a 512-pixel slide
     const std::vector<BYTE> mismatch = av1_slide(default_edge, 512);
     IFE_CHECK(fails_with(validate_file_structure({mismatch.data(), mismatch.size()}),
-                         FileError::CONFORMANCE, "max_frame_width_minus_1 255"));
+                         FileError::CONFORMANCE, "AV1 max_frame_width_minus_1 is 255;"));
     SequenceHeader large;
     large.frame_width = large.frame_height = 512;
     const std::vector<BYTE> matched = av1_slide(large, 512);
@@ -672,8 +715,16 @@ void test_validate_file_structure() {
     still.still_picture = 1;
     const std::vector<BYTE> stacked = zstack_slide(still, 3);
     const FileAccessInfo    stacked_at{stacked.data(), stacked.size()};
-    for (const char* named : {"Layer 0, tile 0", "3 planes", "still_picture 1"})
-        IFE_CHECK(fails_with(validate_file_structure(stacked_at), FileError::CONFORMANCE, named));
+    // validate_file_structure's message is the layer's, after the layer and tile.
+    Abstraction::File lifted;
+    IFE_CHECK(abstract_file_structure(stacked_at, lifted).succeeded());
+    const std::string at_offset = std::to_string(lifted.tileTable.layers.at(0).at(0).offset);
+    IFE_CHECK(fails_with(validate_file_structure(stacked_at), FileError::CONFORMANCE,
+                         "Layer 0, tile 0, OFFSET " + at_offset + ": AV1 still_picture is 1; "
+                         "TILE_PIXEL_DATA.Z_PLANES 3 requires 0 (AV1 " + SECTION + "5.5.1, <<ife-tile-av1>>)"));
+    IFE_CHECK(validate_file_structure(stacked_at).message ==
+              "Layer 0, tile 0, OFFSET " + at_offset + ": AV1 still_picture is 1; "
+              "TILE_PIXEL_DATA.Z_PLANES 3 requires 0 (AV1 " + SECTION + "5.5.1, <<ife-tile-av1>>)");
     const std::vector<BYTE> single = zstack_slide(still, 1);
     IFE_CHECK(validate_file_structure({single.data(), single.size()}).succeeded());
     const std::vector<BYTE> sequence = zstack_slide({}, 3);
@@ -686,6 +737,7 @@ int main() {
     test_conformant_headers_pass();
     test_headers_an_encoder_wrote();
     test_each_disagreement_names_its_fields();
+    test_messages_are_generated();
     test_plane_count();
     test_stream_only_rules_are_not_checked();
     test_walk_bounds();

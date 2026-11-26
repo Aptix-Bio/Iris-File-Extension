@@ -12,8 +12,10 @@ stays the one source of the rule (D1). This pins four things:
     element, its section, the relation and the clause;
   * `validate()` refuses a malformed section -- an unknown relation, an IFE
     field no block declares, a tile encoding the schema does not declare, a
-    clause the narrative does not anchor, a missing requirement or operand, a
-    key outside the closed vocabulary;
+    clause the narrative does not anchor, a missing section or operand, a key
+    outside the closed vocabulary (`requirement` among them: the rule's prose
+    lives in the specification and the field descriptions, and every
+    diagnostic is generated from the entry's fields);
   * the emitters carry it: IFE_Blocks declares the fields struct and the
     check and defines each comparison, the validation layer's
     check_tile_stream reads the stream under that tile encoding alone, and a
@@ -98,6 +100,8 @@ def main() -> int:
     ]
     if listed != _AV1_CHECKS:
         failures.append(f"external_check.AV1 lists {listed}, expected {_AV1_CHECKS}")
+    if any("requirement" in c for c in av1.get("checks", [])):
+        failures.append("an AV1 check carries requirement prose; diagnostics come from its fields")
     if any(c.get("clause") != "ife-tile-av1" for c in av1.get("checks", [])):
         failures.append("an AV1 check does not cite clause ife-tile-av1")
     if not av1:
@@ -121,7 +125,8 @@ def main() -> int:
         "an IFE field no block declares": lambda s: s["checks"][0].update(ife_field="TILE_TABLE.TILE_EDGE"),
         "an undeclared tile encoding": lambda s: s.update(under="TILE_ENCODING_AVIF"),
         "an unanchored clause": lambda s: s["checks"][0].update(clause="ife-tile-av2"),
-        "no requirement": lambda s: s["checks"][0].pop("requirement"),
+        "no section": lambda s: s["checks"][0].pop("section"),
+        "a requirement key": lambda s: s["checks"][0].update(requirement="be TILE_LENGTH - 1"),
         "equals with no value": lambda s: s["checks"][2].pop("value"),
         "one_of with no values": lambda s: s["checks"][3].pop("values"),
         "equals_when_ife_above with no threshold": lambda s: s["checks"][9].pop("threshold"),
