@@ -24,6 +24,7 @@ from __future__ import annotations
 import struct
 from typing import Any, NamedTuple
 
+from ..validate import EXTERNAL_CONTEXT
 from ..model.layout import RECOVERY_PREFIX, FieldLayout, LayoutResult, SpecError, _TYPE_CPP, _canonical_type, constants_groups, is_banner, is_enum_group, parse_int, value_groups, version_key
 
 
@@ -1466,6 +1467,7 @@ def emit_blocks_header(
     document: dict[str, Any],
     header: dict[str, Any],
     witness_hash: str,
+    external_check: dict[str, Any] | None = None,
 ) -> str:
     """IFE_Blocks.hpp — the whole generated C++ layer, one header.
 
@@ -1552,6 +1554,7 @@ def emit_blocks_header(
     ]
     _emit_create_infos(out, layout, types)
     _emit_validation_hooks(out, layout)
+    _emit_external_declarations(out, external_check)
     _emit_writer_decls(out, layout)
 
     out.append("")
@@ -1691,6 +1694,7 @@ def emit_blocks_source(
     types: dict[str, Any],
     header: dict[str, Any],
     witness_hash: str,
+    external_check: dict[str, Any] | None = None,
 ) -> str:
     """IFE_Blocks.cpp -- the block layer's definitions, compiled once.
 
@@ -1724,6 +1728,7 @@ def emit_blocks_source(
         "namespace blocks {",
     ]
     _emit_inline_definitions(out, layout, types)
+    _emit_external_definitions(out, external_check)
     out += [
         "",
         "}  // namespace blocks",
@@ -1936,53 +1941,145 @@ def _check_lines(block: str, field: FieldLayout, value: str, types: dict[str, An
     return out
 
 
-# The tile encodings whose byte-stream clause the conformance layer checks,
-# each with the hand-written check in include/IFE_Av1.hpp that reads the
-# stream, and the diagnostic. A tile stream has no CreateInfo (TILE_PIXEL_DATA's
-# is its frame), so no field clause in spec/ife_fields.json can describe it;
-# the clause is the specification's prose, cited by its anchor (D31, TE-3).
-_STREAM_CLAUSES: dict[str, tuple[str, str]] = {
-    "TILE_ENCODING_AV1": (
-        "::Iris::File::detail::check_av1_tile_stream",
-        "TILE_PIXEL_DATA under TILE_ENCODING_AV1 shall open with a sequence header declaring 8-bit "
-        "4:2:0 or 4:4:4 colour with the BT.601 matrix at full range, one operating point, frames of "
-        "TILE_LENGTH square, no superres and no film grain. Per the IFE specification, clause "
-        "ife-tile-av1.",
-    ),
-}
+# ---- external_check (spec/ife_fields.json; D31) --------------------------- #
+# IFE's blocks cross-checked against what a tile byte-stream's own header
+# reports. The section lists, per external specification, the syntax elements
+# a hand-written reader (include/IFE_<Spec>.hpp, detail::read_<spec>_stream)
+# takes from the stream and the IFE field each must agree with; everything
+# below is emitted from it, so the JSON stays the one source of the rule.
 
 
-def _emit_tile_stream_check(constants_doc: dict[str, Any]) -> list[str]:
-    """check_tile_stream: one case per tile encoding, so a new encoding fails
-    -Wswitch here until someone decides whether its stream has a clause."""
+
+def _external_specs(section: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """The specifications an external_check section names, in document order."""
+    return {k: v for k, v in (section or {}).items() if not is_banner(k) and isinstance(v, dict)}
+
+
+def _external_names(spec_name: str) -> tuple[str, str, str, str]:
+    """(fields struct, check, reader, reader header) for a specification."""
+    pascal = _pascal(spec_name.lower())
+    lower = spec_name.lower()
+    return (f"{pascal}StreamFields", f"check_{lower}_stream",
+            f"::Iris::File::detail::read_{lower}_stream", f"IFE_{pascal}.hpp")
+
+
+def _external_signature(spec_name: str) -> str:
+    fields, check, _, _ = _external_names(spec_name)
+    return (f"Status {check}(const {fields}& fields, std::uint64_t tile_length, "
+            "std::uint64_t z_planes,\n"
+            "                         ::Iris::File::Offset at, const ValidationHooks* hooks) noexcept")
+
+
+def _external_condition(check: dict[str, Any]) -> tuple[str, str]:
+    """(the C++ condition that fails the check, the value it expected)."""
+    element = f"fields.{check['field']}"
+    relation = check["relation"]
+    if relation == "equals":
+        return f"{element} != {check['value']}", str(check["value"])
+    if relation == "one_of":
+        return " && ".join(f"{element} != {v}" for v in check["values"]), str(max(check["values"]))
+    context = EXTERNAL_CONTEXT.get(check["ife_field"])
+    if context is None:
+        raise SpecError(f"external_check: {check['ife_field']} is not a field a stream check is given "
+                        f"(one of {sorted(EXTERNAL_CONTEXT)})")
+    if relation == "plus_one_equals":
+        return f"{element} + 1 != {context}", f"{context} - 1"
+    if relation == "equals_when_ife_above":
+        return f"{context} > {check['threshold']} && {element} != {check['value']}", str(check["value"])
+    raise SpecError(f"external_check: unknown relation {relation!r}")
+
+
+def _external_diagnostic(spec_name: str, check: dict[str, Any]) -> str:
+    text = (f"{spec_name} {check['field']} shall {check['requirement']}, to agree with "
+            f"{check['ife_field']}. Per the {spec_name} specification, section {check['section']}, "
+            f"and the IFE specification, clause {check['clause']}.")
+    return text.replace('"', "'")
+
+
+def _emit_external_declarations(out: list[str], section: dict[str, Any] | None) -> None:
+    """IFE_Blocks.hpp: each specification's fields struct and check."""
+    for spec_name, spec in _external_specs(section).items():
+        fields, _, reader, header = _external_names(spec_name)
+        members: dict[str, None] = {c["field"]: None for c in spec.get("checks", [])}
+        out += [
+            "",
+            f"// ---- external_check: {spec_name} ({spec.get('title', '')}) ----",
+            f"/// The {spec_name} syntax elements spec/ife_fields.json's external_check",
+            f"/// compares with IFE's blocks, read from {spec.get('stream', 'the stream')}",
+            f"/// by {reader} ({header}). Each holds the value",
+            f"/// the {spec_name} specification gives it, an inferred value included.",
+            f"struct {fields} {{",
+        ]
+        out += [f"    std::uint64_t {m} = 0;" for m in members]
+        out += [
+            "};",
+            "",
+            f"/// IFE's blocks against what a tile's stream reports, under {spec.get('under')},",
+            "/// each check in external_check's order. The first disagreement is",
+            "/// CONFORMANCE: `block` names the IFE field, `field` the syntax element,",
+            "/// `found` its value; `diagnostic`, when set, receives the requirement.",
+            "/// `tile_length` is TILE_LENGTH resolved (256 where zero); `z_planes` is",
+            "/// the tile's plane count (zero and one both mean one plane).",
+            "[[nodiscard]] " + _external_signature(spec_name) + ";",
+        ]
+
+
+def _emit_external_definitions(out: list[str], section: dict[str, Any] | None) -> None:
+    """IFE_Blocks.cpp: each check, one comparison per external_check entry."""
+    for spec_name, spec in _external_specs(section).items():
+        out += ["", f"// ---- external_check: {spec_name} ----",
+                "IFE_BLOCKS_LINKAGE " + _external_signature(spec_name) + " {"]
+        used = {EXTERNAL_CONTEXT.get(c["ife_field"]) for c in spec.get("checks", [])
+                if c["relation"] in ("plus_one_equals", "equals_when_ife_above")}
+        out += [f"    (void){name};" for name in EXTERNAL_CONTEXT.values() if name not in used]
+        for check in spec.get("checks", []):
+            condition, expected = _external_condition(check)
+            out += [
+                f"    if ({condition}) {{",
+                "        if (hooks != nullptr && hooks->diagnostic != nullptr)",
+                f'            *hooks->diagnostic = "{_external_diagnostic(spec_name, check)}";',
+                f'        return {{Check::CONFORMANCE, "{check["ife_field"]}", "{check["field"]}",',
+                f"                fields.{check['field']}, {expected}, at}};",
+                "    }",
+            ]
+        out += ["    return {};", "}"]
+
+
+def _emit_tile_stream_check(constants_doc: dict[str, Any], section: dict[str, Any] | None) -> list[str]:
+    """IFE_Validation.cpp's check_tile_stream: one case per tile encoding, so a
+    new encoding fails -Wswitch here until its external checks, if any, are
+    placed. Under an encoding external_check names, the stream is read and
+    checked; under every other, nothing is read."""
     members = [
         member
         for entries in constants_doc.get("tile_encodings", {}).get("ife_version", {}).values()
         for member in entries
     ]
-    unknown = sorted(set(_STREAM_CLAUSES) - set(members))
+    checked = {spec["under"]: name for name, spec in _external_specs(section).items()}
+    unknown = sorted(set(checked) - set(members))
     if unknown:
-        raise SpecError(f"stream clauses name tile encodings the schema does not declare: {unknown}")
+        raise SpecError(f"external_check applies under tile encodings the schema does not declare: {unknown}")
     enum = "::Iris::File::constants::TileEncodings"
     out = [
         "",
-        "// ---- tile byte-streams ----",
+        "// ---- tile byte-streams (external_check) ----",
         f"Status check_tile_stream({enum} encoding, std::uint16_t tile_length,",
-        "                         const ::Iris::File::BYTE* stream, ::Iris::File::Size size,",
-        "                         ::Iris::File::Offset at, const ValidationHooks* hooks) noexcept {",
+        "                         std::uint16_t z_planes, const ::Iris::File::BYTE* stream,",
+        "                         ::Iris::File::Size size, ::Iris::File::Offset at,",
+        "                         const ValidationHooks* hooks) noexcept {",
         "    switch (encoding) {",
     ]
-    unchecked = [m for m in members if m not in _STREAM_CLAUSES]
+    unchecked = [m for m in members if m not in checked]
     out += [f"        case {enum}::{m}:" for m in unchecked]
     out += ["            return {};"]
-    for member, (checker, message) in _STREAM_CLAUSES.items():
+    for member, spec_name in checked.items():
+        fields, check, reader, _ = _external_names(spec_name)
         out += [
             f"        case {enum}::{member}: {{",
-            f"            const auto finding = {checker}(stream, size, tile_length);",
-            "            if (finding) return {};",
-            f'            __report(hooks, "{message}");',
-            '            return {Check::CONFORMANCE, "TILE_PIXEL_DATA", finding.field, finding.found,',
-            "                    finding.expected, at};",
+            f"            {fields} fields{{}};",
+            f"            const Status read = {reader}(stream, size, fields, hooks);",
+            "            if (!read) return {read.code, read.block, read.field, read.found, read.expected, at};",
+            f"            return {check}(fields, tile_length, z_planes, at, hooks);",
             "        }",
         ]
     out += [
@@ -1995,7 +2092,7 @@ def _emit_tile_stream_check(constants_doc: dict[str, Any]) -> list[str]:
 
 def emit_validation_source(
     layout: LayoutResult, constants_doc: dict[str, Any], types: dict[str, Any],
-    header: dict[str, Any], witness_hash: str
+    header: dict[str, Any], witness_hash: str, external_check: dict[str, Any] | None = None
 ) -> str:
     """IFE_Validation.cpp — the conformance layer behind the writers' hook."""
     out: list[str] = [
@@ -2004,12 +2101,13 @@ def emit_validation_source(
         "// costing a null check when absent, and free to be verbose because it",
         "// never runs in a shipped product's hot path. Every check below is",
         "// generated from a normative clause in spec/ife_fields.json, so a",
-        "// diagnostic and the published specification cite one source. The",
-        "// one exception is check_tile_stream: a tile stream has no fields, so its",
-        "// clause is the specification's prose, cited by its anchor.",
+        "// diagnostic and the published specification cite one source;",
+        "// check_tile_stream runs the external checks of its external_check section.",
         "",
         '#include "IFE_Validation.hpp"',
-        '#include "IFE_Av1.hpp"',
+    ]
+    out += [f'#include "{_external_names(name)[3]}"' for name in _external_specs(external_check)]
+    out += [
         "",
         "namespace Iris::File {",
         "namespace blocks {",
@@ -2108,7 +2206,7 @@ def emit_validation_source(
             "}",
         ]
 
-    out += _emit_tile_stream_check(constants_doc)
+    out += _emit_tile_stream_check(constants_doc, external_check)
 
     out += [
         "",
@@ -2165,21 +2263,25 @@ def emit_validation_header(
         "/// layer itself is shared and immutable.",
         "[[nodiscard]] const ValidationHooks& conformance_layer() noexcept;",
         "",
-        "/// A tile byte-stream checked against its tile encoding's clause, which no",
-        "/// store() can do: the runtime places a stream with no CreateInfo (the",
-        "/// TILE_PIXEL_DATA store writes only the frame before it). An encoder",
-        "/// that builds with the layer calls it on each stream before",
-        "/// `append_tile`. Under TILE_ENCODING_AV1 it reads the stream's first",
-        "/// sequence header (spec, AV1 Tile Byte-Streams); under every other",
-        "/// encoding it reads nothing and passes. A failure is CONFORMANCE on",
-        "/// TILE_PIXEL_DATA, `field` the AV1 syntax element and `found` its value;",
-        "/// `diagnostic`, when set, receives the clause.",
+        "/// IFE's blocks against what a tile byte-stream's own header reports",
+        "/// (spec/ife_fields.json, external_check), which no store() can check: the",
+        "/// runtime places a stream with no CreateInfo (the TILE_PIXEL_DATA store",
+        "/// writes only the frame before it). An encoder that builds with the layer",
+        "/// calls it on each stream before `append_tile`. Under a tile encoding",
+        "/// external_check names (TILE_ENCODING_AV1) it reads the stream as far as",
+        "/// the checked syntax elements and compares each with its IFE field; under",
+        "/// every other encoding it reads nothing and passes. A disagreement is",
+        "/// CONFORMANCE, `block` the IFE field, `field` the syntax element and",
+        "/// `found` its value; a stream the reader cannot walk is CONFORMANCE on",
+        "/// TILE_PIXEL_DATA, naming what it could not read. `diagnostic`, when set,",
+        "/// receives the requirement.",
         "///",
         "/// `tile_length` is the slide's tile edge in pixels, resolved from",
-        "/// TILE_LENGTH (256 where it is zero); `at` is the stream's offset, carried",
-        "/// into the Status.",
+        "/// TILE_LENGTH (256 where it is zero); `z_planes` is the number of focal",
+        "/// planes the stream carries (its frame's Z_PLANES; zero and one both mean",
+        "/// one plane); `at` is the stream's offset, carried into the Status.",
         "[[nodiscard]] Status check_tile_stream(::Iris::File::constants::TileEncodings encoding,",
-        "                                       std::uint16_t tile_length,",
+        "                                       std::uint16_t tile_length, std::uint16_t z_planes,",
         "                                       const ::Iris::File::BYTE* stream, ::Iris::File::Size size,",
         "                                       ::Iris::File::Offset at, const ValidationHooks* hooks) noexcept;",
         "",

@@ -93,6 +93,21 @@ def main() -> int:
         if p.get("fields", {}).get("ife_version")
     }
 
+    # An external check names an IFE field; one whose field postdates the
+    # baseline is not part of it, and a specification left with no check is
+    # dropped (external_check, D31: TILE_LENGTH and the tile frame are 1.1).
+    surviving = {
+        f"{name}.{field.get('name')}"
+        for name, block in fields["blocks"].items() if not name.startswith("//")
+        for group in block.get("fields", {}).get("ife_version", {}).values() for field in group
+    }
+    external = fields.get("external_check", {})
+    for name in [n for n, s in external.items() if isinstance(s, dict)]:
+        external[name]["checks"] = [c for c in external[name].get("checks", [])
+                                    if c.get("ife_field") in surviving]
+        if not external[name]["checks"]:
+            del external[name]
+
     for group in constants.values():
         if isinstance(group, dict) and isinstance(group.get("ife_version"), dict):
             group["ife_version"] = strip_newer(group["ife_version"])

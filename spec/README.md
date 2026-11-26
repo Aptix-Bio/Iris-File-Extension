@@ -129,6 +129,39 @@ keep reading it, and writers refuse it: the generated
 `constants::member_name(value)` names it, so the Builder's refusal comes from
 the schema instead of a copied literal.
 
+## Cross-checks against an external stream (`external_check`)
+
+Where a tile byte-stream's own header reports a fact an IFE block also
+states, `spec/ife_fields.json`'s optional `external_check` section lists the
+agreement (decided 2026-11-26, D31). IFE does not validate the external
+stream: each entry compares one of its syntax elements with an IFE field.
+
+```json
+"external_check": {
+  "AV1": { "title": "...", "url": "...", "read": "2026-11-26",
+           "under": "TILE_ENCODING_AV1", "stream": "...",
+           "checks": [ { "ife_field": "TILE_TABLE.TILE_LENGTH",
+                         "field": "max_frame_width_minus_1", "section": "5.5.1",
+                         "relation": "plus_one_equals", "clause": "ife-tile-av1",
+                         "requirement": "be TILE_LENGTH - 1, ..." } ] } }
+```
+
+| Key | Meaning |
+|---|---|
+| `under` | the tile encoding whose streams the specification defines |
+| `ife_field` | the IFE field the element agrees with, `BLOCK.FIELD` |
+| `field`, `section` | the external syntax element and the section of the external specification that defines it |
+| `relation` | `equals` (`value`), `one_of` (`values`), `plus_one_equals` (the element plus one is the IFE field), `equals_when_ife_above` (`value` wherever the IFE field exceeds `threshold`) |
+| `clause` | the IFE clause stating the rule, an anchor `--validate` requires the narrative to declare |
+| `requirement` | the rule in prose, after "shall"; it is the diagnostic |
+
+The vocabulary is closed and `--validate` enforces it. The generator emits
+each specification's fields struct and check into the block layer
+(`Av1StreamFields`, `check_av1_stream`); a hand-written reader,
+`include/IFE_<Specification>.hpp`, walks the stream only as far as the
+elements named. A cross-check changes no wire fact, so the witness does not
+move.
+
 ## Strings
 
 **There is no string type.** Every string in IFE is a byte range whose length

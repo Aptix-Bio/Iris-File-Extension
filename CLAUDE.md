@@ -88,14 +88,16 @@ The line runs between the stream and everything describing it:
 * **Out of scope** — what the compressed bytes decode to, whether a JPEG is
   valid, anything requiring a codec.
 * **The one exception** — a `TILE_ENCODING_AV1` stream's first sequence
-  header (D31, decided 2026-11-26). It declares the colour conversion and the
-  frame size every frame decodes to, which a slide must fix as JPEG's JFIF
-  does, so `validate_file_structure` and the validation layer's
-  `check_tile_stream` read that one OBU with the bounded parser in
-  `include/IFE_Av1.hpp`. Nothing past it is read, no frame header and no tile
-  data, and the read path and the Builder still never parse a stream. A test
-  that writes AV1 tiles through `validate_file_structure` therefore writes a
-  real sequence header in front of its filler (`ife_av1_tile_stream_tests`).
+  header (D31, decided 2026-11-26), read to check that it agrees with IFE's
+  own blocks: TILE_LENGTH is the frame size, TILE_ENCODING_AV1's BT.601
+  full-range 8-bit colour is the header's, and a tile of several focal
+  planes is no still picture. The agreements live in `external_check` in
+  `spec/ife_fields.json`, the generator emits them, and `include/IFE_Av1.hpp`
+  walks the stream only as far as the elements they name. No rule of the AV1
+  stream's own is checked, nothing past `color_range` is read, and the read
+  path and the Builder still never parse a stream. A test that writes AV1
+  tiles through `validate_file_structure` therefore writes a real sequence
+  header in front of its filler (`ife_av1_tile_stream_tests`).
 
 The same line explains the byte-array blocks: IFE checks that a run is sliced
 where its sizes entry says, never what the slice means. `ICC_PROFILE` bytes are

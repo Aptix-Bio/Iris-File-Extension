@@ -51,18 +51,21 @@ def _render(
 ) -> tuple[dict[str, str], LayoutResult]:
     """Render every output: relative path -> content (byte-stable)."""
     layout = derive_layout(fields_doc, constants_doc)
+    external = fields_doc.get("external_check", {})
     outputs = {
         f"{_CPP_ROOT}/IFE_Blocks.hpp": emit_blocks_header(
-            layout, fields_doc.get("types", {}), constants_doc, header, witness_hash
+            layout, fields_doc.get("types", {}), constants_doc, header, witness_hash,
+            external_check=external,
         ),
         f"{_CPP_ROOT}/IFE_Blocks.cpp": emit_blocks_source(
-            layout, fields_doc.get("types", {}), header, witness_hash
+            layout, fields_doc.get("types", {}), header, witness_hash, external_check=external
         ),
         f"{_CPP_ROOT}/IFE_Validation.hpp": emit_validation_header(
             layout, header, witness_hash
         ),
         f"{_CPP_ROOT}/IFE_Validation.cpp": emit_validation_source(
-            layout, constants_doc, fields_doc.get("types", {}), header, witness_hash
+            layout, constants_doc, fields_doc.get("types", {}), header, witness_hash,
+            external_check=external,
         ),
         f"{_CPP_ROOT}/IFE_Map.hpp": emit_map_header(layout, header, witness_hash),
     }

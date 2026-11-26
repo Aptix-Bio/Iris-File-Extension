@@ -674,58 +674,55 @@ defined by the AV1 Bitstream and Decoding Process Specification
   Z_PLANES.
 * A single-plane tile *shall* be one key frame: one temporal unit whose frame
   has frame_type equal to KEY_FRAME and show_frame equal to 1.
-* The byte-stream's first sequence header OBU *shall* be preceded only by
-  temporal delimiter, padding or reserved OBUs, and *shall* carry no OBU
-  extension header (AV1 specification, sections 5.3 and 6.2.2).
-* That sequence header (AV1 specification, sections 5.5.1 and 5.5.2) *shall*
-  declare the colour every frame of the stream decodes to:
-** color_description_present_flag equal to 1, matrix_coefficients equal to
-   6 (MC_BT_601) and color_range equal to 1 (full swing);
-** high_bitdepth equal to 0 and mono_chrome equal to 0: 8-bit samples in
-   three planes;
-** seq_profile equal to 0 (4:2:0 chroma) or 1 (4:4:4 chroma).
-* That sequence header *shall* declare one operating point:
-  operating_points_cnt_minus_1 equal to 0 and operating_point_idc[0] equal
-  to 0, so that every frame belongs to it.
-* Every decoded frame of the byte-stream *shall* be exactly TILE_LENGTH
-  pixels wide and TILE_LENGTH pixels high (<<ife-tile-length>>). The sequence
-  header *shall* declare max_frame_width_minus_1 + 1 and
-  max_frame_height_minus_1 + 1 each equal to TILE_LENGTH, and enable_superres
-  equal to 0. A decoder *shall* refuse a frame of any other size.
-* That sequence header *shall* declare film_grain_params_present equal to 0.
 
-Every frame of an AV1 tile therefore decodes to RGB through the BT.601 matrix
-at full range, the conversion the JPEG tile encoding applies: JFIF 1.02
-(https://www.w3.org/Graphics/JPEG/jfif3.pdf[JPEG File Interchange Format
-1.02], read 2026-11-26) defines its YCbCr as that of CCIR 601 at 256 levels.
-The conversion is defined by ITU-T H.273
-(https://www.itu.int/rec/T-REC-H.273[ITU-T H.273]), which the AV1
-specification names as the definition of matrix_coefficients and color_range
-(section 6.4.2). The AV1 decoding process ends at the decoded sample arrays
-and leaves colour conversion to the application (section 7.18.1), so this
-specification fixes it, and every decoder of a slide produces the same RGB
-from the same stream. color_primaries and transfer_characteristics are not
+The first sequence header OBU of each byte-stream (AV1 specification, sections
+5.5.1 and 5.5.2) *shall* agree with the slide's blocks:
+
+* *Frame size.* max_frame_width_minus_1 + 1 and max_frame_height_minus_1 + 1
+  *shall* each equal TILE_LENGTH (<<ife-tile-length>>), and enable_superres
+  *shall* be 0: superres codes a narrower frame and upscales it (section
+  7.16), which changes the decoded width TILE_LENGTH states. Every decoded
+  frame *shall* be exactly TILE_LENGTH pixels wide and TILE_LENGTH pixels
+  high, and a decoder *shall* refuse a frame of any other size.
+* *Colour.* TILE_ENCODING_AV1 declares 8-bit samples in three planes, coded
+  with the BT.601 matrix at full range. The sequence header *shall* agree:
+  seq_profile 0 (4:2:0 chroma) or 1 (4:4:4 chroma), high_bitdepth 0,
+  mono_chrome 0, color_description_present_flag 1 so that the matrix is
+  coded, matrix_coefficients 6 (MC_BT_601) and color_range 1.
+* *Focal planes.* A tile that carries more than one focal plane
+  (<<ife-focal-planes>>, the Z_PLANES of its tile frame) *shall not* have
+  still_picture equal to 1: a still picture is one coded frame (section
+  6.4.1), and so holds one plane.
+
+An AV1 tile with matrix_coefficients equal to 6 and color_range equal to 1
+carries full-range 8-bit YCbCr with K~R~ 0.299 and K~B~ 0.114, Y spanning 0
+to 255 and Cb and Cr centred at 128 (ITU-T H.273 V4, 07/2024, clause 8.3,
+equations 36 to 38, https://www.itu.int/rec/T-REC-H.273[ITU-T H.273], read
+2026-11-26). A decoder converts it to RGB with the inverse equations of ITU-T
+T.871 (JFIF, ISO/IEC 10918-5) clause 7
+(https://www.itu.int/rec/T-REC-T.871[ITU-T T.871], read 2026-11-26), rounding
+and clamping each output to 0 to 255: the conversion the JPEG tile encoding
+applies, so a tile decodes to the same RGB under either encoding. The AV1
+decoding process ends at the decoded samples and leaves colour conversion to
+the application (AV1 specification, section 7.18.1), which is why this
+specification states it. matrix_coefficients 5, which H.273 lists as
+functionally the same as 6, is refused, so that a reader checks and a writer
+writes one code point. color_primaries and transfer_characteristics are not
 constrained: the colorimetry of a slide's RGB is that of its ICC profile
 (<<ife-icc-profile>>), which the METADATA block's ICC_COLOR_OFFSET names
 (<<ife-metadata>>).
 
 The sequence header states only the largest size a frame may have. A frame
 header may code a smaller frame (frame_size_override_flag and frame_size(),
-AV1 specification, sections 5.9.2 and 5.9.5), except where
-reduced_still_picture_header is 1; that form allows a single coded frame
-(still_picture, section 6.4.1), so it cannot carry a Z-stacked tile. The
-exact size is therefore a requirement on the decoded frames, and the
-sequence header's maximum is required to equal it. Superres would code a
-narrower frame and upscale it (section 7.16), and film grain is synthesized
-by the decoder at output and added to the decoded samples (section 7.18.3);
-either changes the RGB a tile decodes to, so a stream carries neither. Both
-are refused by a flag in the sequence header, without reading a frame
-header.
+AV1 specification, sections 5.9.2 and 5.9.5), so the exact size is a
+requirement on the decoded frames, refused by the decoder that meets one.
 
-NOTE: The reference library checks the first sequence header of every
-TILE_ENCODING_AV1 stream in `validate_file_structure` and in its optional
-conformance layer (`check_tile_stream`), and reads no frame header. A frame
-coded smaller than TILE_LENGTH is refused by the decoder that meets it.
+NOTE: These checks are listed in the external_check section of
+`spec/ife_fields.json`, from which the reference library's generator emits
+them: `validate_file_structure` and the optional conformance layer
+(`check_tile_stream`) run them. The library reads no frame header and applies
+no rule of the AV1 stream's own beyond what it needs to reach the sequence
+header.
 
 NOTE: This version does not specify which focal plane is coded as the key
 frame, nor how the decode order of a stream's shown frames maps to focal

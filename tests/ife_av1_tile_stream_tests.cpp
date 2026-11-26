@@ -310,10 +310,10 @@ bool refuses(const b::Status& status, const std::string& field, std::uint64_t fo
     return matched;
 }
 
-constexpr const char* LENGTH   = "TILE_TABLE.TILE_LENGTH";
-constexpr const char* ENCODING = "TILE_TABLE.ENCODING";
-constexpr const char* PLANES   = "TILE_PIXEL_DATA.Z_PLANES";
-constexpr const char* STREAM   = "TILE_PIXEL_DATA";
+constexpr const char* AGAINST_TILE_LENGTH = "TILE_TABLE.TILE_LENGTH";
+constexpr const char* AGAINST_ENCODING    = "TILE_TABLE.ENCODING";
+constexpr const char* AGAINST_Z_PLANES    = "TILE_PIXEL_DATA.Z_PLANES";
+constexpr const char* AGAINST_STREAM      = "TILE_PIXEL_DATA";
 
 void test_conformant_headers_pass() {
     // Every branch of the syntax a conformant header can take.
@@ -384,7 +384,7 @@ void test_headers_an_encoder_wrote() {
     // color_description_present_flag 0 (so matrix_coefficients is not coded).
     const std::vector<BYTE> plain = {0x12, 0x00, 0x0A, 0x07, 0x18, 0x1D, 0xFF,
                                      0xFF, 0xFB, 0x10, 0x80};
-    IFE_CHECK(refuses(check(plain), "color_description_present_flag", 0, ENCODING));
+    IFE_CHECK(refuses(check(plain), "color_description_present_flag", 0, AGAINST_ENCODING));
     // aomenc --obu --limit=1 --profile=1 --i444 --matrix-coefficients=bt601
     //   -o one444.obu in444.y4m   (4:4:4, no XCOLORRANGE)
     // Decodes to: seq_profile 1, still_picture 1, reduced_still_picture_header 1,
@@ -393,7 +393,7 @@ void test_headers_an_encoder_wrote() {
     // color_range 0 (studio swing).
     const std::vector<BYTE> studio = {0x12, 0x00, 0x0A, 0x09, 0x38, 0x1D, 0xFF,
                                       0xFF, 0xFB, 0x40, 0x80, 0x81, 0x84};
-    IFE_CHECK(refuses(check(studio), "color_range", 0, ENCODING));
+    IFE_CHECK(refuses(check(studio), "color_range", 0, AGAINST_ENCODING));
     // A still picture is one coded frame: it holds one focal plane.
 }
 
@@ -412,23 +412,23 @@ void test_each_disagreement_names_its_fields() {
         mutate(s);
         cases.push_back({s, block, field, found});
     };
-    add(LENGTH, "max_frame_width_minus_1", 511, [](SequenceHeader& s) { s.frame_width = 512; });
-    add(LENGTH, "max_frame_height_minus_1", 127, [](SequenceHeader& s) { s.frame_height = 128; });
-    add(LENGTH, "enable_superres", 1, [](SequenceHeader& s) { s.enable_superres = 1; });
-    add(ENCODING, "seq_profile", 2, [](SequenceHeader& s) { s.seq_profile = 2; });
-    add(ENCODING, "high_bitdepth", 1, [](SequenceHeader& s) { s.high_bitdepth = 1; });
-    add(ENCODING, "mono_chrome", 1, [](SequenceHeader& s) { s.mono_chrome = 1; });
-    add(ENCODING, "color_description_present_flag", 0, [](SequenceHeader& s) { s.color_description_present = 0; });
-    add(ENCODING, "matrix_coefficients", MC_BT_709, [](SequenceHeader& s) { s.matrix_coefficients = MC_BT_709; });
+    add(AGAINST_TILE_LENGTH, "max_frame_width_minus_1", 511, [](SequenceHeader& s) { s.frame_width = 512; });
+    add(AGAINST_TILE_LENGTH, "max_frame_height_minus_1", 127, [](SequenceHeader& s) { s.frame_height = 128; });
+    add(AGAINST_TILE_LENGTH, "enable_superres", 1, [](SequenceHeader& s) { s.enable_superres = 1; });
+    add(AGAINST_ENCODING, "seq_profile", 2, [](SequenceHeader& s) { s.seq_profile = 2; });
+    add(AGAINST_ENCODING, "high_bitdepth", 1, [](SequenceHeader& s) { s.high_bitdepth = 1; });
+    add(AGAINST_ENCODING, "mono_chrome", 1, [](SequenceHeader& s) { s.mono_chrome = 1; });
+    add(AGAINST_ENCODING, "color_description_present_flag", 0, [](SequenceHeader& s) { s.color_description_present = 0; });
+    add(AGAINST_ENCODING, "matrix_coefficients", MC_BT_709, [](SequenceHeader& s) { s.matrix_coefficients = MC_BT_709; });
     // BT.709 primaries, sRGB transfer and the identity matrix: color_range is
     // not coded (section 5.5.2), and the matrix fails first.
-    add(ENCODING, "matrix_coefficients", MC_IDENTITY, [](SequenceHeader& s) { s.matrix_coefficients = MC_IDENTITY; });
-    add(ENCODING, "color_range", 0, [](SequenceHeader& s) { s.color_range = 0; });
+    add(AGAINST_ENCODING, "matrix_coefficients", MC_IDENTITY, [](SequenceHeader& s) { s.matrix_coefficients = MC_IDENTITY; });
+    add(AGAINST_ENCODING, "color_range", 0, [](SequenceHeader& s) { s.color_range = 0; });
     for (const Case& c : cases)
         IFE_CHECK(refuses(check(tile_stream(c.header)), c.field, c.found, c.block));
 
     // The frame size is checked against the slide's TILE_LENGTH.
-    IFE_CHECK(refuses(check(tile_stream({}), 512), "max_frame_width_minus_1", TILE - 1, LENGTH));
+    IFE_CHECK(refuses(check(tile_stream({}), 512), "max_frame_width_minus_1", TILE - 1, AGAINST_TILE_LENGTH));
 }
 
 /// still_picture means one coded frame (AV1 section 6.4.1), which cannot hold
@@ -443,8 +443,8 @@ void test_plane_count() {
     for (const SequenceHeader& s : {still, reduced}) {
         IFE_CHECK(static_cast<bool>(check(tile_stream(s), TILE, 1)));
         IFE_CHECK(static_cast<bool>(check(tile_stream(s), TILE, 0)));   // zero means one plane
-        IFE_CHECK(refuses(check(tile_stream(s), TILE, 2), "still_picture", 1, PLANES));
-        IFE_CHECK(refuses(check(tile_stream(s), TILE, 7), "still_picture", 1, PLANES));
+        IFE_CHECK(refuses(check(tile_stream(s), TILE, 2), "still_picture", 1, AGAINST_Z_PLANES));
+        IFE_CHECK(refuses(check(tile_stream(s), TILE, 7), "still_picture", 1, AGAINST_Z_PLANES));
     }
     IFE_CHECK(static_cast<bool>(check(tile_stream({}), TILE, 7)));   // a sequence of frames
 }
@@ -477,30 +477,30 @@ void test_walk_bounds() {
 
     std::vector<BYTE> forbidden = header;
     forbidden[0] |= 0x80;
-    IFE_CHECK(refuses(check(forbidden), "obu_forbidden_bit", 1, STREAM));
+    IFE_CHECK(refuses(check(forbidden), "obu_forbidden_bit", 1, AGAINST_STREAM));
 
     std::vector<BYTE> no_size = header;
     no_size[0] &= static_cast<BYTE>(~0x02u);
-    IFE_CHECK(refuses(check(no_size), "obu_has_size_field", 0, STREAM));
+    IFE_CHECK(refuses(check(no_size), "obu_has_size_field", 0, AGAINST_STREAM));
 
     // obu_size past the bytes that remain.
     std::vector<BYTE> overrun = header;
     overrun[1] = static_cast<BYTE>(header.size());   // one more than the payload holds
-    IFE_CHECK(refuses(check(overrun), "obu_size", header.size(), STREAM));
+    IFE_CHECK(refuses(check(overrun), "obu_size", header.size(), AGAINST_STREAM));
 
     // leb128: above 2^32 - 1, and a continuation bit on the eighth byte.
     const std::vector<BYTE> wide = {0x0A, 0x80, 0x80, 0x80, 0x80, 0x10};   // 2^32
-    IFE_CHECK(refuses(check(wide), "obu_size", std::uint64_t{1} << 32, STREAM));
+    IFE_CHECK(refuses(check(wide), "obu_size", std::uint64_t{1} << 32, AGAINST_STREAM));
     const std::vector<BYTE> long_leb = {0x0A, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00};
-    IFE_CHECK(refuses(check(long_leb), "leb128_byte", 0x80, STREAM));
+    IFE_CHECK(refuses(check(long_leb), "leb128_byte", 0x80, AGAINST_STREAM));
 
     // A stream with no OBU at all, and one holding only a temporal delimiter
     // and padding: neither has a sequence header to read.
-    IFE_CHECK(refuses(check({}), "sequence_header_obu", 0, STREAM));
+    IFE_CHECK(refuses(check({}), "sequence_header_obu", 0, AGAINST_STREAM));
     std::vector<BYTE> headless = obu(OBU_TEMPORAL_DELIMITER, {});
     const std::vector<BYTE> padding = obu(OBU_PADDING, {0x80});
     headless.insert(headless.end(), padding.begin(), padding.end());
-    IFE_CHECK(refuses(check(headless), "sequence_header_obu", headless.size(), STREAM));
+    IFE_CHECK(refuses(check(headless), "sequence_header_obu", headless.size(), AGAINST_STREAM));
 }
 
 /// Every prefix of a conformant stream that stops before the sequence

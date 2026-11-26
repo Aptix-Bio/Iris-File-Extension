@@ -265,7 +265,7 @@
             {
               "name": "TILE_LENGTH",
               "type": "u16",
-              "description": "Edge length in pixels of the square tiles this slide is divided into. Zero, and absence in a file written under 1.0, both denote the default of 256. Encoders are recommended to use 256."
+              "description": "Edge length in pixels of the square tiles this slide is divided into. Zero, and absence in a file written under 1.0, both denote the default of 256. Encoders are recommended to use 256. Under TILE_ENCODING_AV1 every decoded frame of a tile is exactly this many pixels wide and high, and each stream's first sequence header shall agree (decided 2026-11-26; external_check): max_frame_width_minus_1 + 1 and max_frame_height_minus_1 + 1 equal to it, and enable_superres 0, because superres would decode a narrower frame and upscale it."
             },
             {
               "name": "MIP_LEVELS",
@@ -760,7 +760,7 @@
             {
               "name": "Z_PLANES",
               "type": "u16",
-              "description": "Number of focal (Z) planes actually carried by this stream, never exceeding the Z_PLANES maximum of the layer holding the tile. Zero denotes a single plane."
+              "description": "Number of focal (Z) planes actually carried by this stream, never exceeding the Z_PLANES maximum of the layer holding the tile. Zero denotes a single plane. Under TILE_ENCODING_AV1 a stream of more than one plane shall not have still_picture equal to 1 in its first sequence header, since a still picture is one coded frame and holds one plane (decided 2026-11-26; external_check)."
             }
           ]
         }
@@ -787,6 +787,111 @@
           ]
         }
       }
+    }
+  },
+  "// MARK: - EXTERNAL CHECKS": "IFE fields cross-checked against a tile byte-stream's own header (D31).",
+  "external_check": {
+    "description": "Cross-checks between IFE's blocks and what an external specification's stream reports about the same facts (decided 2026-11-26, D31). IFE does not validate the external stream: each check reads one syntax element from a tile byte-stream and requires it to agree with an IFE field. The generator emits the comparisons and their diagnostics from this section into the block layer, where validate_file_structure and the conformance layer's check_tile_stream run them; a reader per specification, include/IFE_<Specification>.hpp, walks the stream only as far as the elements named here. Relations: equals (the element is `value`), one_of (one of `values`), plus_one_equals (the element plus one is the IFE field), equals_when_ife_above (the element is `value` wherever the IFE field exceeds `threshold`).",
+    "AV1": {
+      "title": "AV1 Bitstream and Decoding Process Specification",
+      "url": "https://aomediacodec.github.io/av1-spec/",
+      "read": "2026-11-26",
+      "under": "TILE_ENCODING_AV1",
+      "stream": "the first sequence_header_obu of each tile byte-stream (AV1 sections 5.5.1 and 5.5.2)",
+      "checks": [
+        {
+          "ife_field": "TILE_TABLE.TILE_LENGTH",
+          "field": "max_frame_width_minus_1",
+          "section": "5.5.1",
+          "relation": "plus_one_equals",
+          "clause": "ife-tile-av1",
+          "requirement": "be TILE_LENGTH - 1, so every decoded frame is at most TILE_LENGTH pixels wide"
+        },
+        {
+          "ife_field": "TILE_TABLE.TILE_LENGTH",
+          "field": "max_frame_height_minus_1",
+          "section": "5.5.1",
+          "relation": "plus_one_equals",
+          "clause": "ife-tile-av1",
+          "requirement": "be TILE_LENGTH - 1, so every decoded frame is at most TILE_LENGTH pixels high"
+        },
+        {
+          "ife_field": "TILE_TABLE.TILE_LENGTH",
+          "field": "enable_superres",
+          "section": "5.5.1",
+          "relation": "equals",
+          "value": 0,
+          "clause": "ife-tile-av1",
+          "requirement": "be 0, since superres codes a narrower frame and upscales it (AV1 section 7.16), changing the decoded width TILE_LENGTH states"
+        },
+        {
+          "ife_field": "TILE_TABLE.ENCODING",
+          "field": "seq_profile",
+          "section": "5.5.1",
+          "relation": "one_of",
+          "values": [
+            0,
+            1
+          ],
+          "clause": "ife-tile-av1",
+          "requirement": "be 0 (4:2:0) or 1 (4:4:4), the profiles of the 8-bit three-plane colour TILE_ENCODING_AV1 declares"
+        },
+        {
+          "ife_field": "TILE_TABLE.ENCODING",
+          "field": "high_bitdepth",
+          "section": "5.5.2",
+          "relation": "equals",
+          "value": 0,
+          "clause": "ife-tile-av1",
+          "requirement": "be 0: TILE_ENCODING_AV1 declares 8-bit samples"
+        },
+        {
+          "ife_field": "TILE_TABLE.ENCODING",
+          "field": "mono_chrome",
+          "section": "5.5.2",
+          "relation": "equals",
+          "value": 0,
+          "clause": "ife-tile-av1",
+          "requirement": "be 0: TILE_ENCODING_AV1 declares three colour planes"
+        },
+        {
+          "ife_field": "TILE_TABLE.ENCODING",
+          "field": "color_description_present_flag",
+          "section": "5.5.2",
+          "relation": "equals",
+          "value": 1,
+          "clause": "ife-tile-av1",
+          "requirement": "be 1, so that matrix_coefficients is coded"
+        },
+        {
+          "ife_field": "TILE_TABLE.ENCODING",
+          "field": "matrix_coefficients",
+          "section": "5.5.2",
+          "relation": "equals",
+          "value": 6,
+          "clause": "ife-tile-av1",
+          "requirement": "be 6 (MC_BT_601): TILE_ENCODING_AV1 declares the BT.601 matrix"
+        },
+        {
+          "ife_field": "TILE_TABLE.ENCODING",
+          "field": "color_range",
+          "section": "5.5.2",
+          "relation": "equals",
+          "value": 1,
+          "clause": "ife-tile-av1",
+          "requirement": "be 1 (full swing): TILE_ENCODING_AV1 declares full range"
+        },
+        {
+          "ife_field": "TILE_PIXEL_DATA.Z_PLANES",
+          "field": "still_picture",
+          "section": "5.5.1",
+          "relation": "equals_when_ife_above",
+          "value": 0,
+          "threshold": 1,
+          "clause": "ife-tile-av1",
+          "requirement": "be 0 on a tile of more than one focal plane, since a still picture is one coded frame (AV1 section 6.4.1)"
+        }
+      ]
     }
   }
 }

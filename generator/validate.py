@@ -784,7 +784,105 @@ def validate(
                 "python3 tools/refresh_witness.py"
             )
 
+    # ---- 8. external checks name real fields, relations and clauses ----- #
+    problems.extend(_external_check_problems(fields_doc, constants_doc, blocks, anchors))
+
     return problems, warnings
+
+
+# The closed vocabulary of external_check (D31): each relation and the
+# operands it requires. There is deliberately no expression syntax, as with the
+# conformance clauses: a new relation is a new emitter branch, reviewed.
+EXTERNAL_RELATIONS: dict[str, tuple[str, ...]] = {
+    "equals": ("value",),
+    "one_of": ("values",),
+    "plus_one_equals": (),
+    "equals_when_ife_above": ("value", "threshold"),
+}
+# The IFE fields whose value a stream check is given, and the parameter of the
+# emitted check that carries each, resolved as a reader resolves it.
+EXTERNAL_CONTEXT: dict[str, str] = {
+    "TILE_TABLE.TILE_LENGTH": "tile_length",
+    "TILE_PIXEL_DATA.Z_PLANES": "z_planes",
+}
+_EXTERNAL_CHECK_KEYS = {"ife_field", "field", "section", "relation", "value", "values",
+                        "threshold", "clause", "requirement"}
+_EXTERNAL_SPEC_KEYS = {"title", "url", "read", "under", "stream", "checks"}
+
+
+def external_specifications(fields_doc: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """The external specifications external_check names, in document order."""
+    section = fields_doc.get("external_check", {})
+    return {k: v for k, v in section.items() if not is_banner(k) and isinstance(v, dict)}
+
+
+def _external_check_problems(
+    fields_doc: dict[str, Any],
+    constants_doc: dict[str, Any],
+    blocks: dict[str, Any],
+    anchors: set[str] | None,
+) -> list[str]:
+    """external_check: every entry names a declared IFE field, a relation of
+    the closed vocabulary with its operands, a C++ identifier for the external
+    element, and a clause the narrative anchors; each specification applies
+    under a declared tile encoding."""
+    problems: list[str] = []
+    section = fields_doc.get("external_check")
+    if section is None:
+        return problems
+    if not isinstance(section, dict):
+        return ["external_check is not an object"]
+    for key, value in section.items():
+        if not is_banner(key) and key != "description" and not isinstance(value, dict):
+            problems.append(f"external_check.{key} is not a specification object")
+    declared = {
+        f"{name}.{field.get('name')}"
+        for name, block in blocks.items()
+        for _, field in _versioned_fields(block.get("fields"))
+    }
+    encodings = {name for _, name, _ in _members(_enum_groups(constants_doc).get("tile_encodings", {}))}
+    for spec_name, spec in external_specifications(fields_doc).items():
+        where = f"external_check.{spec_name}"
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", spec_name):
+            problems.append(f"{where}: the specification name is not an identifier")
+        for key in sorted(set(spec) - _EXTERNAL_SPEC_KEYS):
+            problems.append(f"{where}: unknown key {key!r}")
+        if spec.get("under") not in encodings:
+            problems.append(f"{where}: under {spec.get('under')!r} is not a declared tile encoding")
+        checks = spec.get("checks")
+        if not isinstance(checks, list) or not checks:
+            problems.append(f"{where}: checks is not a non-empty list")
+            continue
+        for i, check in enumerate(checks):
+            at = f"{where}.checks[{i}]"
+            if not isinstance(check, dict):
+                problems.append(f"{at} is not an object")
+                continue
+            for key in sorted(set(check) - _EXTERNAL_CHECK_KEYS):
+                problems.append(f"{at}: unknown key {key!r}")
+            for key in ("ife_field", "field", "section", "relation", "clause", "requirement"):
+                if not isinstance(check.get(key), str) or not check.get(key):
+                    problems.append(f"{at}: {key} is missing or empty")
+            if check.get("ife_field") not in declared:
+                problems.append(f"{at}: ife_field {check.get('ife_field')!r} is no declared field")
+            if not re.fullmatch(r"[a-z][a-z0-9_]*", str(check.get("field", ""))):
+                problems.append(f"{at}: field {check.get('field')!r} is not a lower-case identifier")
+            relation = check.get("relation")
+            if relation not in EXTERNAL_RELATIONS:
+                problems.append(f"{at}: relation {relation!r} is not one of {sorted(EXTERNAL_RELATIONS)}")
+            for operand in EXTERNAL_RELATIONS.get(str(relation), ()):
+                value = check.get(operand)
+                ok = (isinstance(value, list) and value and all(isinstance(v, int) for v in value)
+                      if operand == "values" else isinstance(value, int) and not isinstance(value, bool))
+                if not ok:
+                    problems.append(f"{at}: relation {relation!r} needs {operand}")
+            if relation in ("plus_one_equals", "equals_when_ife_above") and \
+                    check.get("ife_field") not in EXTERNAL_CONTEXT:
+                problems.append(f"{at}: relation {relation!r} compares with a value a stream check is "
+                                f"given, one of {sorted(EXTERNAL_CONTEXT)}")
+            if anchors is not None and check.get("clause") not in anchors:
+                problems.append(f"{at}: clause {check.get('clause')!r} is not anchored in the narrative")
+    return problems
 
 
 def _every_versioned(
