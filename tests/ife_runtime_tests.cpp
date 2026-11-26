@@ -108,7 +108,8 @@ void test_abstraction_matches_what_was_encoded() {
     v1_fixture::Expected expected;
     auto f = v1_slide(expected);
 
-    const auto slide = Iris::File::abstract_file_structure({f.data(), f.size()});
+    Iris::File::Abstraction::File slide;
+    IFE_CHECK(Iris::File::abstract_file_structure({f.data(), f.size()}, slide).succeeded());
 
     // ---- header ---------------------------------------------------------- //
     IFE_CHECK(slide.header.fileSize == expected.file_size);
@@ -235,7 +236,8 @@ void test_partial_nested_offset_is_rejected() {
     // Find the root attributes' sizes array through the public map, then the
     // nested entry within it, rather than hard-coding either position.
     namespace b = ::Iris::File::blocks;
-    const auto map = Iris::File::generate_file_map({f.data(), f.size()});
+    Iris::File::Abstraction::FileMap map;
+    IFE_CHECK(Iris::File::generate_file_map({f.data(), f.size()}, map).succeeded());
     bool corrupted = false;
     for (const auto& [offset, entry] : map) {
         if (entry.type != Iris::File::Abstraction::MAP_ENTRY_ATTRIBUTE_SIZES) continue;
@@ -264,10 +266,11 @@ void test_partial_nested_offset_is_rejected() {
 
     // And the abstraction refuses to lift it rather than reading a partial
     // offset and inventing a structure the encoder never wrote.
-    bool threw = false;
-    try { (void)Iris::File::abstract_file_structure({f.data(), f.size()}); }
-    catch (const std::runtime_error&) { threw = true; }
-    IFE_CHECK(threw);
+    // The lift fails the same way, with the same code (R-8).
+    Iris::File::Abstraction::File lifted;
+    const auto refused = Iris::File::abstract_file_structure({f.data(), f.size()}, lifted);
+    IFE_CHECK(refused.failed());
+    IFE_CHECK(refused.code_as<Iris::File::FileError>() == Iris::File::FileError::BAD_NESTED_VALUE);
 }
 
 // The root attributes structure of a loaded snapshot, at the version the file
@@ -324,10 +327,11 @@ void test_attribute_cycle_is_rejected() {
     IFE_CHECK(result.code_as<Iris::File::FileError>() == Iris::File::FileError::CYCLE);
     IFE_CHECK(std::string(result.message).find("returns to a block") != std::string::npos);
 
-    bool threw = false;
-    try { (void)Iris::File::abstract_file_structure({f.data(), f.size()}); }
-    catch (const std::runtime_error&) { threw = true; }
-    IFE_CHECK(threw);
+    // The lift fails the same way, with the same code (R-8).
+    Iris::File::Abstraction::File lifted;
+    const auto refused = Iris::File::abstract_file_structure({f.data(), f.size()}, lifted);
+    IFE_CHECK(refused.failed());
+    IFE_CHECK(refused.code_as<Iris::File::FileError>() == Iris::File::FileError::CYCLE);
 }
 
 // A nesting chain deeper than the runtime will follow.
@@ -406,7 +410,8 @@ void test_shared_nested_structures_are_validated_once() {
 
     // The map walks the same edges on files with no validated graph behind
     // them, so it carries the same memory.
-    const auto map = Iris::File::generate_file_map({f.data(), f.size()});
+    Iris::File::Abstraction::FileMap map;
+    IFE_CHECK(Iris::File::generate_file_map({f.data(), f.size()}, map).succeeded());
     IFE_CHECK(map.size() > 0);
 }
 
@@ -465,17 +470,19 @@ void test_attribute_nesting_depth_is_bounded() {
     IFE_CHECK(message.find("past the limit of " + std::to_string(b::MAX_BLOCK_DEPTH))
               == std::string::npos);
 
-    bool threw = false;
-    try { (void)Iris::File::abstract_file_structure({f.data(), f.size()}); }
-    catch (const std::runtime_error&) { threw = true; }
-    IFE_CHECK(threw);
+    // The lift fails the same way, with the same code (R-8).
+    Iris::File::Abstraction::File lifted;
+    const auto refused = Iris::File::abstract_file_structure({f.data(), f.size()}, lifted);
+    IFE_CHECK(refused.failed());
+    IFE_CHECK(refused.code_as<Iris::File::FileError>() == Iris::File::FileError::TOO_DEEP);
 }
 
 void test_file_map_finds_every_block() {
     v1_fixture::Expected expected;
     auto f = v1_slide(expected);
 
-    const auto map = Iris::File::generate_file_map({f.data(), f.size()});
+    Iris::File::Abstraction::FileMap map;
+    IFE_CHECK(Iris::File::generate_file_map({f.data(), f.size()}, map).succeeded());
     IFE_CHECK(map.file_size == expected.file_size);
 
     // Ordered by offset, which is the property the whole API exists for:
@@ -589,7 +596,8 @@ void test_reference_fields_name_every_edge() {
         }
 
         using namespace Iris::File::Abstraction;
-        const FileMap map = Iris::File::generate_file_map({f.data(), f.size()});
+        FileMap map;
+        IFE_CHECK(Iris::File::generate_file_map({f.data(), f.size()}, map).succeeded());
         for (const Offset at : w.reached) IFE_CHECK(map.count(at) == 1);
         for (const auto& [at, entry] : map) {
             if (w.reached.count(at) || entry.type == MAP_ENTRY_TILE_PIXEL_DATA) continue;

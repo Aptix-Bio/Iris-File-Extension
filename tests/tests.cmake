@@ -344,6 +344,31 @@ if(IFE_BUILD_TESTS)
     add_test(NAME ife_recovery_tests COMMAND ife_recovery_tests ${IFE_CORPUS_DIR})
     set_tests_properties(ife_recovery_tests PROPERTIES TIMEOUT 600)
 
+    # No exception crosses the public read API (R-8): every entry point is
+    # noexcept and returns a Result, its value written through a reference; a
+    # damaged block, a bad MIP_LEVELS, a missing tile and a missing label each
+    # come back as a failure naming the offending value.
+    add_executable(
+        ife_boundary_results_tests
+        ${PROJECT_SOURCE_DIR}/tests/ife_boundary_results_tests.cpp
+        ${IFE_SOURCE_DIR}/IFE_Runtime.cpp
+        ${IFE_SOURCE_DIR}/IFE_Recovery.cpp
+        ${IFE_SOURCE_DIR}/IFE_Builder.cpp
+        ${IFE_SOURCE_DIR}/IFE_Parser.cpp
+        ${IFE_SOURCE_DIR}/IFE_Window.cpp
+        ${IFE_GENERATED_SOURCES}
+        ${irisheaders_SOURCE_DIR}/src/IrisMemory.cpp
+    )
+    target_include_directories(
+        ife_boundary_results_tests PRIVATE ${IFE_INCLUDE_DIR} ${IFE_GENERATED_DIR}
+                                           ${PROJECT_SOURCE_DIR}/tests
+                                           ${irisheaders_SOURCE_DIR}/include
+                                           ${irisheaders_SOURCE_DIR}/priv
+    )
+    target_compile_features(ife_boundary_results_tests PRIVATE cxx_std_20)
+    target_link_libraries(ife_boundary_results_tests PRIVATE ${IFE_Dependencies})
+    add_test(NAME ife_boundary_results_tests COMMAND ife_boundary_results_tests)
+
     # No member of the abstraction may view into the mapping it was built
     # from (XP-4): the tree is built from a heap buffer, the buffer is
     # destroyed, and every string the tree keeps is read. Meaningless without

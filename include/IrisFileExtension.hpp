@@ -17,7 +17,11 @@
  *
  * The entry points carry the house API shape: snake_case names, a single
  * `FileAccessInfo` argument (mapped pointer + size), and `Result` returns.
- * Iris-Slide consumes this surface directly.
+ * Every one is `noexcept`: no exception crosses this API. A function that
+ * produces a value writes it through its last, non-`const` reference argument
+ * and still returns the `Result`; the value is written only on success
+ * (development/style_guide.md, Errors). Iris-Slide consumes this surface
+ * directly.
  */
 
 #ifndef IRIS_FILE_EXTENSION_HPP
@@ -129,7 +133,15 @@ enum class FileError : std::uint32_t {
     UNRECOGNIZED_CHECK,     ///< a generated check this runtime does not know
     BAD_TILE_ENTRY,         ///< a tile-offsets entry names bytes the file does not hold
     BAD_ANNOTATION_GROUP,   ///< an annotation group names annotations that do not exist
-    OUT_OF_MEMORY,          ///< the diagnostic could not be formatted
+    OUT_OF_MEMORY,          ///< an allocation failed: the diagnostic, or the structure being read
+    // Added 2026-11-25 (R-8), when the read path stopped throwing across the
+    // API: what the exceptions it threw used to say.
+    NO_SUCH_TILE,           ///< a layer or tile index the slide does not have
+    NO_SUCH_IMAGE,          ///< no associated image carries the label asked for
+    NOT_MAPPED,             ///< the file could not be mapped (missing, unreadable or empty)
+    TOO_LARGE,              ///< an attribute structure expands past the nodes a reader will lift
+    UNEXPECTED_EXCEPTION,   ///< an exception IFE does not throw reached a public function
+    SYSTEM_ERROR,           ///< the operating system refused a resource (a thread that would not start)
 };
 
 /// Access to a mapped Iris file: the identity every file-level operation takes.
@@ -163,13 +175,15 @@ Result               IFE_EXPORT is_iris_slide_file      (const FileAccessInfo&) 
 Result               IFE_EXPORT validate_file_structure (const FileAccessInfo&) noexcept;
 
 /**
- * @brief Abstract the Iris file structure into memory for quick data access.
+ * @brief Abstract the Iris file structure into memory for quick data access,
+ *        writing it to @p file.
  *
  * Validates what it reads, and never repairs. Every block it follows must pass
  * validate() -- both witnesses agree, and every length the block declares fits
- * the file -- or this throws std::runtime_error naming the block and the check
- * that failed. A structurally damaged file is therefore refused here, not
- * opened. To reopen one, run the recovery engine (being rebuilt against
+ * the file -- or this returns a failure Result whose FileError is the check
+ * that failed and whose message names the block, its byte and the value it
+ * holds; @p file is then left as it was. A structurally damaged file is
+ * therefore refused here, not opened. To reopen one, run the recovery engine (being rebuilt against
  * FastFHIR's census design) and call this again. validate_file_structure()
  * checks the whole graph without building anything; this checks the blocks it
  * lifts, as it lifts them.
@@ -185,7 +199,7 @@ Result               IFE_EXPORT validate_file_structure (const FileAccessInfo&) 
  * separately read. This keeps the abstraction layer quick but removes memory bloat.
  */
 // START HERE: THIS IS THE MAIN ENTRY FUNCTION TO THE FILE
-Abstraction::File    IFE_EXPORT abstract_file_structure (const FileAccessInfo&);
+[[nodiscard]] Result IFE_EXPORT abstract_file_structure (const FileAccessInfo&, Abstraction::File& file) noexcept;
 
 // MARK: - READ (PARSER)
 
@@ -201,7 +215,7 @@ class Parser_t;   ///< the read BODY — defined in "IFE_Parser.hpp"
  * (generate_file_map) lives. This mirrors the write handle `Builder` beside it
  * and FastFHIR's own `Parser` / `Builder` pair.
  *
- * Two ways to bind one. `Parser::open(path)` maps the file read-only and OWNS
+ * Two ways to bind one. `create_parser({.filepath = path}, parser)` maps the file read-only and OWNS
  * the mapping: it stays mapped for as long as any copy of the handle lives, so
  * a reader that keeps the Parser keeps its bytes. `Parser(FileAccessInfo)`
  * BORROWS a mapping the caller owns, exactly as `FileAccessInfo` documents.
@@ -211,6 +225,9 @@ class Parser_t;   ///< the read BODY — defined in "IFE_Parser.hpp"
  * THE SPLIT. A parser owns access to the file: the mapping, validation, the
  * lifted structure, and bounds-checked byte spans. It never decodes a stream;
  * that is the application's (a codec's) job.
+ *
+ * Every read method is `noexcept` and returns a `Result`, writing what it
+ * reads through its last argument only on success.
  */
 class Parser : public std::shared_ptr<Parser_t>
 {
@@ -227,41 +244,39 @@ public:
     /// needs the complete body).
     explicit Parser(const FileAccessInfo& info);
 
-    /// Map @p path read-only and bind to it; the parser owns the mapping. The
-    /// file is not validated here — `validate_file_structure()` does that, and
-    /// `abstraction()` checks what it lifts. @throws std::runtime_error if the
-    /// file cannot be mapped (missing, unreadable, or empty).
-    static Parser open(const std::filesystem::path& path);
-
     /// Quick header check (magic, recovery tag, header fits). Does not validate.
     Result is_iris_slide_file() const noexcept;
     /// Deep structural validation of every offset in the graph.
     Result validate_file_structure() const noexcept;
-    /// Lift the file structure into memory for quick data access (a fresh
-    /// copy on each call; `abstraction()` lifts once and keeps it).
-    Abstraction::File abstract_file_structure() const;
+    /// Lift the file structure into @p file (a fresh copy on each call;
+    /// `abstraction()` lifts once and keeps it). Fails as the free
+    /// `abstract_file_structure` does.
+    [[nodiscard]] Result abstract_file_structure(Abstraction::File& file) const noexcept;
 
-    /// The lifted structure, lifted once on first use and kept. Thread-safe.
-    /// @throws std::runtime_error as `abstract_file_structure` does, on every
-    ///         call, if the file is structurally damaged.
-    const Abstraction::File& abstraction() const;
+    /// Point @p file at the lifted structure, lifted once on first use and
+    /// kept for the life of the parser's body. Thread-safe. A pointer to the
+    /// one cached lift, so the read path copies nothing (D14). On a
+    /// structurally damaged file every call fails as `abstract_file_structure`
+    /// does and @p file is left as it was.
+    [[nodiscard]] Result abstraction(const Abstraction::File*& file) const noexcept;
 
-    /// The compressed stream of one tile, zero-copy. Empty for a NULL_TILE
-    /// entry — "no tile at this grid position", not an error; a real tile is
-    /// never empty. @throws std::out_of_range for a bad layer or tile.
-    std::span<const BYTE> tile(uint32_t layer, uint32_t tile) const;
+    /// The compressed stream of one tile, zero-copy, into @p stream. Empty for
+    /// a NULL_TILE entry — "no tile at this grid position", an expected
+    /// outcome and a success; a real tile is never empty. A layer or tile the
+    /// slide does not have is NO_SUCH_TILE, naming the index.
+    [[nodiscard]] Result tile(uint32_t layer, uint32_t tile, std::span<const BYTE>& stream) const noexcept;
 
-    /// How many focal planes the tile's stream carries: 1 on a single-plane
-    /// layer, 0 for a NULL_TILE entry, otherwise the count its tile frame
-    /// records (every stream of a Z-stacked layer is framed; the abstraction
-    /// has already refused a file where one is not). Under TILE_ENCODING_AV1
-    /// the stream holds this many shown frames, one per plane.
-    /// @throws std::out_of_range for a bad layer or tile.
-    uint16_t tile_planes(uint32_t layer, uint32_t tile) const;
+    /// How many focal planes the tile's stream carries, into @p planes: 1 on a
+    /// single-plane layer, 0 for a NULL_TILE entry, otherwise the count its
+    /// tile frame records (every stream of a Z-stacked layer is framed; the
+    /// abstraction has already refused a file where one is not). Under
+    /// TILE_ENCODING_AV1 the stream holds this many shown frames, one per
+    /// plane. A layer or tile the slide does not have is NO_SUCH_TILE.
+    [[nodiscard]] Result tile_planes(uint32_t layer, uint32_t tile, uint16_t& planes) const noexcept;
 
-    /// The compressed stream of one associated image, zero-copy.
-    /// @throws std::out_of_range if no image carries @p label.
-    std::span<const BYTE> image(const std::string& label) const;
+    /// The compressed stream of one associated image, zero-copy, into
+    /// @p stream. NO_SUCH_IMAGE, naming the label, if no image carries it.
+    [[nodiscard]] Result image(const std::string& label, std::span<const BYTE>& stream) const noexcept;
 
     /// The borrowed mapping this parser reads.
     const FileAccessInfo& info() const noexcept;
@@ -270,6 +285,19 @@ public:
     /// Bytes available at @ref data.
     Size size() const noexcept;
 };
+
+/// What `create_parser` maps: a slide file, opened read-only, whose mapping
+/// the parser then owns.
+struct IFE_EXPORT ParserDesc {
+    std::filesystem::path filepath;   ///< the slide to map
+};
+
+/// Map @p desc's file read-only and bind @p parser to it; the parser owns the
+/// mapping for as long as any copy of the handle lives. The file is not
+/// validated here — `validate_file_structure()` does that, and `abstraction()`
+/// checks what it lifts. A file that cannot be mapped (missing, unreadable, or
+/// empty) is NOT_MAPPED, naming the path, and leaves @p parser as it was.
+[[nodiscard]] Result IFE_EXPORT create_parser(const ParserDesc& desc, Parser& parser) noexcept;
 
 // MARK: - WRITE (BUILDER)
 

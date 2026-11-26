@@ -40,7 +40,7 @@ namespace Iris::File {
 /**
  * @brief The read body behind @ref Parser. Internal tier.
  *
- * Holds the mapping — borrowed, or owned when made by `Parser::open` — and
+ * Holds the mapping — borrowed, or owned when made by `create_parser` — and
  * forwards to the read entry points. Nothing is lifted at construction:
  * binding a `Parser` to a huge slide is nearly free, and the structure is
  * lifted once, on first use of `abstraction()`.
@@ -69,7 +69,7 @@ public:
 
     /// The mapping this parser reads.
     [[nodiscard]] const FileAccessInfo& info() const noexcept { return m_info; }
-    /// Whether this parser owns its mapping (made by `Parser::open`).
+    /// Whether this parser owns its mapping (made by `create_parser`).
     [[nodiscard]] bool owns_mapping() const noexcept { return m_owner != nullptr; }
     /// Pointer to the first mapped byte.
     [[nodiscard]] const BYTE* data() const noexcept { return m_info.file_ptr; }
@@ -86,23 +86,24 @@ public:
     [[nodiscard]] Result validate_file_structure() const noexcept {
         return ::Iris::File::validate_file_structure(m_info);
     }
-    /// Lift the file structure into memory for quick data access.
-    [[nodiscard]] Abstraction::File abstract_file_structure() const {
-        return ::Iris::File::abstract_file_structure(m_info);
+    /// Lift the file structure into @p file for quick data access.
+    [[nodiscard]] Result abstract_file_structure(Abstraction::File& file) const noexcept {
+        return ::Iris::File::abstract_file_structure(m_info, file);
     }
 
     // ---- the lifted structure and zero-copy bytes (see Parser) ------------ //
 
-    [[nodiscard]] const Abstraction::File& abstraction() const;
-    [[nodiscard]] std::span<const BYTE>    tile(uint32_t layer, uint32_t tile) const;
-    [[nodiscard]] uint16_t                 tile_planes(uint32_t layer, uint32_t tile) const;
-    [[nodiscard]] std::span<const BYTE>    image(const std::string& label) const;
+    [[nodiscard]] Result abstraction(const Abstraction::File*& file) const noexcept;
+    [[nodiscard]] Result tile(uint32_t layer, uint32_t tile, std::span<const BYTE>& stream) const noexcept;
+    [[nodiscard]] Result tile_planes(uint32_t layer, uint32_t tile, uint16_t& planes) const noexcept;
+    [[nodiscard]] Result image(const std::string& label, std::span<const BYTE>& stream) const noexcept;
 
     // ---- the deeper (modification) surface -------------------------------- //
 
-    /// The offset map of every block, for a caller about to modify a file.
-    [[nodiscard]] Abstraction::FileMap generate_file_map() const {
-        return ::Iris::File::generate_file_map(m_info);
+    /// The offset map of every block into @p map, for a caller about to modify
+    /// a file.
+    [[nodiscard]] Result generate_file_map(Abstraction::FileMap& map) const noexcept {
+        return ::Iris::File::generate_file_map(m_info, map);
     }
 };
 

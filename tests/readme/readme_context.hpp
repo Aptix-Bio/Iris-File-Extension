@@ -3,7 +3,7 @@
  * @brief The placeholder names the README's C++ examples use, declared once so
  *        each example compiles as written (tests/readme/readme_compiles.py).
  *
- * An example says `Parser::open(path)` or `generate_file_map({ptr, size})`
+ * An example says `create_parser({.filepath = path}, parser)` or `generate_file_map({ptr, size}, map)`
  * without saying where `path` or `ptr` came from — that is the reader's
  * program. These declarations stand in for it. They are declarations only:
  * the gate compiles syntax-only and never links, so nothing here is defined.

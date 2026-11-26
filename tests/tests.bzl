@@ -323,6 +323,20 @@ def ife_tests(
         args = ["_main/tests/corpus/cipher_iris.test_slide"],
     )
 
+    # No exception crosses the public read API (R-8): noexcept entry points
+    # returning a Result, each failure naming the offending value.
+    cc_test(
+        name = "ife_boundary_results_tests",
+        srcs = [
+            "tests/ife_boundary_results_tests.cpp",
+            "tests/ife_builder_fixture.hpp",
+            "src/IFE_Failure.hpp",
+        ],
+        copts = copts,
+        size = "small",
+        deps = [ife],
+    )
+
     # The recovery census (RB-3), tested as FastFHIR tests its own.
     cc_test(
         name = "ife_recovery_tests",

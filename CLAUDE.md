@@ -324,6 +324,13 @@ correctly reported nothing wrong.
   used as a span must be bounded by `validate()` before one byte is copied.
   `IMAGE_BYTES` had no such bound, and `validate_file_structure()` passed a
   file that overran it.
+* **Throw inside, return a `Result` at the API** (D30, R-8). A read deep in
+  the graph throws `Failure` (`src/IFE_Failure.hpp`) with its `FileError`;
+  every public read function is `noexcept` and runs its body in `boundary()`,
+  which returns that code. Throwing `std::runtime_error` instead loses the
+  code, and a public function without `boundary()` terminates the process on
+  the first damaged file, since it is `noexcept`. Write an output only once
+  nothing after it can fail.
 * **`ORIENTATION` is read as raw bits.** Its accessor decodes the half to
   degrees, but `ImageOrientation`'s values ARE the half's bit patterns
   (`ORIENTATION_90` is `0x55A0`). The raw load in `IFE_Runtime.cpp` looks like

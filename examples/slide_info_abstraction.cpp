@@ -78,9 +78,9 @@
      Iris::Memory arena;
      std::uint8_t* ptr = nullptr;
      std::size_t size = 0;
-     try {
-         // Mapping reports through Iris::Result instead of throwing; the try
-         // block remains for the validation and abstraction calls below.
+     {
+         // Mapping, validation and abstraction each report through an
+         // Iris::Result; none of them throws.
          const Iris::Result mapped = Iris::create_memory(
              {.filepath = source_path, .read_only = true}, arena);
          if (mapped.failed()) {
@@ -93,21 +93,25 @@
          // ALWAYS VALIDATE the file structure before attempting to
          // read it. This will check the file against the IFE
          // Specfification to ensure adherence.
-         Iris::File::validate_file_structure({ptr, size});
+         const Iris::Result valid = Iris::File::validate_file_structure({ptr, size});
+         if (valid.failed()) {
+             std::cerr << "The slide file failed validation: " << valid.message << "\n";
+             return EXIT_FAILURE;
+         }
          std::cout << "Iris Slide file \"" << source_path
              << "\" successfully passed file validation.\n";
  
      }
-     catch (std::runtime_error& error) {
-         std::cerr << "Failed to create slide file abstraction: "
-             << error.what() << "\n";
-         return EXIT_FAILURE;
-     }
  
-     try {
+     {
          using namespace Iris::File::Abstraction;
  
-         auto slide = Iris::File::abstract_file_structure({ptr, size});
+         File slide;
+         const Iris::Result lifted = Iris::File::abstract_file_structure({ptr, size}, slide);
+         if (lifted.failed()) {
+             std::cerr << "Failed to create slide file abstraction: " << lifted.message << "\n";
+             return EXIT_FAILURE;
+         }
          std::cout << "Slide File information:\n"
              << "\t Encoded using IFE Spec v"
              << (slide.header.extVersion >> 16) << "."
@@ -181,11 +185,6 @@
                  }
          }
 
-     }
-     catch (std::runtime_error& error) {
-         std::cerr << "Failed to read slide file information: "
-             << error.what() << "\n";
-         return EXIT_FAILURE;
      }
  
      return EXIT_SUCCESS;

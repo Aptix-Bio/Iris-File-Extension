@@ -201,8 +201,15 @@ struct IFE_EXPORT FileMap : public std::map<Offset, FileMapEntry> {
  * easier to simply read them into memory and then rewrite them back to disk following the update.
  */
 // ALWAYS CREATE A FILE MAP BEFORE PERFORMING AN UPDATE TO A FILE
-Abstraction::FileMap IFE_EXPORT generate_file_map       (const FileAccessInfo&);
+// Written to @p map; a FILE_HEADER that does not fit the file, or a tile table
+// or METADATA the header names and the file cannot hold, fails naming the block
+// and leaves @p map as it was.
+[[nodiscard]] Result IFE_EXPORT generate_file_map       (const FileAccessInfo&, Abstraction::FileMap& map) noexcept;
 
+/// The recovery census. Every call is `noexcept` and returns a `Result`,
+/// writing what it produces through its argument only on success; a failure
+/// is an allocation (OUT_OF_MEMORY) or a worker thread that could not start
+/// (SYSTEM_ERROR).
 class IFE_EXPORT Recovery {
 public:
     /// Reads nothing at construction. Every later read is bounded by the file.
@@ -213,10 +220,11 @@ public:
     /// (and its frame) that a self-validating tile offsets array names. A
     /// self-validating position whose tag is no type this build knows is not
     /// recorded, and is reported on `failures`. Gaps are filled by find_gaps().
-    Abstraction::FileMap scan() const;
+    /// Written to @p map.
+    [[nodiscard]] Result scan(Abstraction::FileMap& map) const noexcept;
 
-    /// Tile `map` and record every run of bytes no entry covers.
-    void find_gaps(Abstraction::FileMap& map) const;
+    /// Tile `map` and record, in `map.gaps`, every run of bytes no entry covers.
+    [[nodiscard]] Result find_gaps(Abstraction::FileMap& map) const noexcept;
 
     /// How a slot's word names its child.
     enum class SlotRepr : std::uint8_t {
@@ -266,9 +274,10 @@ public:
         std::vector<Abstraction::Gap> holes;
         std::vector<Point>            points;       ///< the open questions, by seat
     };
-    /// Run the census alone. Read-only. A clean file is one attached island,
-    /// no holes and no open points; one flipped bit opens the point it damaged.
-    Census census() const;
+    /// Run the census alone, into @p census. Read-only. A clean file is one
+    /// attached island, no holes and no open points; one flipped bit opens the
+    /// point it damaged.
+    [[nodiscard]] Result census(Census& census) const noexcept;
 
 private:
     const BYTE* m_base = nullptr;

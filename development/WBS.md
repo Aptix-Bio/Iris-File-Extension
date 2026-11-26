@@ -51,6 +51,9 @@ flowchart LR
     R4 --> R5["R-5 JS/WASM bindings"]
     R3 --> RC5["RC-5 checksum footer<br/>1.2 material"]
     R7["R-7 generated layer out of<br/>the source tree, released<br/>doing"] --> R3
+    R8["R-8 the read API returns<br/>Result, nothing thrown<br/>doing"] --> R3
+    R8 --> R9["R-9 the Builder's API<br/>returns Result"]
+    R9 --> R4
     TE1["TE-1 tile encoding 3 is AV1<br/>doing"] --> OD["OD-T1 key plane,<br/>decode order to depth"]
     IV1["IV-1 I2S version<br/>packed in VERSION"]
     TE2["TE-2 tile encodings 4, 5:<br/>UASTC, XUASTC<br/>doing"] --> OD2["OD-T3 XUASTC footprint<br/>OD-T4 XUASTC mip levels"]
@@ -77,6 +80,8 @@ touch different files from the recovery lane and can run beside it.
 | R-4, R-5 | Python and JavaScript/WebAssembly bindings | `todo`, after R-3 (D15) |
 | R-6 | an expectations header for the 1.1 witness | `doing`: the test exists, its record is owed |
 | R-7 | `generate_IFE.py` is the generator's one entry point; the generated layer is built out of the source tree and published with each release | `doing` (pull request #10, stacked on #9) |
+| R-8 | no exception crosses the public read API: every read entry point is `noexcept`, returns a `Result` and writes its value through an output reference | `doing` (pull request #11; Iris-Slide's call sites on its paired branch, Iris-Slide#4; `downstream` red as a coordinated change until #4 merges) |
+| R-9 | the Builder's public API returns a `Result` in the same form | `todo`, before R-4 |
 | ZC-1 to ZC-5 | the read path as a const lens (D14) | `todo` |
 | BL-1 to BL-7 | carried forward, none gating the release | `todo` |
 
@@ -145,7 +150,7 @@ The job now cross-compiles with `g++-s390x-linux-gnu` and runs every test under
 - [x] CI-2.1 **The binaries are big-endian.** `ife_host_byte_order_tests`: the test binary is an ELF with `EI_DATA=2` and `e_machine=22` (S390); emulated it prints `compiled for big; memory layout big` and exits 0; the same source compiled natively exits 1. [3c5560b](https://github.com/Aptix-Bio/Iris-File-Extension/commit/3c5560b0b8e561785ec7a963d167661706e764dc)
 - [x] CI-2.2 **Local green.** The preset passes 26 of 26 tests in an Ubuntu 24.04 arm64 container (CMake 3.28.3, 2026-11-24). [3c5560b](https://github.com/Aptix-Bio/Iris-File-Extension/commit/3c5560b0b8e561785ec7a963d167661706e764dc)
 - [x] CI-2.3 **VERIFY:** `big-endian (s390x)` green on pull request #1, run 45447197501, job 138634119321: 26 of 26 tests under emulation in 2 min 46 s. [3c5560b](https://github.com/Aptix-Bio/Iris-File-Extension/commit/3c5560b0b8e561785ec7a963d167661706e764dc)
-- [x] CI-2.4 **Downstream.** Green in run 45448367106 at [bcf1eb6](https://github.com/Aptix-Bio/Iris-File-Extension/commit/bcf1eb6176604c598bfd6ee4da04c75085ff280e)
+- [x] CI-2.4 **Downstream.** Green in run 45448367106 at [bcf1eb6](https://github.com/Aptix-Bio/Iris-File-Extension/commit/bcf1eb6176604c598bfd6ee4da04c75085ff280e) *Amended 2026-11-25 (R-8):* from Iris-Slide's move to vcpkg ports (2026-11-24) the job built Iris-Slide's pinned IFE commit, since its FETCHCONTENT override was unused, so the green runs after that date did not test this repository; R-8.2 builds through Iris-Slide's overlay port, and RTM Api_04 is Implemented again until its runs are green.
       (job 138638305129, `Iris-Slide builds against this branch`, 3 min 54 s,
       on PR #1, 2026-11-24; every job in that run passed). Run 45447197501 had
       failed this job at configure with "Could not find nasm": Iris-Slide
@@ -469,6 +474,50 @@ Python takes the generated layer from the release. Branch
       uploads the generated-source archive beside the packages.
 - [x] R-7.4 **The `generated` job follows the pipeline rules.** Its one `run:` step is `cmake -P cmake/generated_archive.cmake`, which runs `generate_IFE.py`, adds LICENSE, writes the archive with `cmake -E tar` and fails when it is missing or empty; its checkout and upload are pinned by full commit SHA, the checkout with `persist-credentials: false` (development/ci_runners.md; the rubric's Pipeline item, which judges a job a diff adds in full). Evidence: a local run writes a 39,718-byte archive of `generated_source/` and LICENSE, a malformed PKG exits 1 naming it, actionlint adds no finding. [1d54487](https://github.com/Aptix-Bio/Iris-File-Extension/commit/1d54487014dd524013bde7614058ed58b18cdea2)
 
+## R-8 — No exception crosses the public read API `doing`
+
+development/style_guide.md, Errors: a function a consumer calls is `noexcept`
+and returns an `Iris::Result`, and since 2026-11-25 a boundary that produces a
+value writes it through an output reference and still returns the `Result`
+(no value-carrying result type). Until this package the read path threw
+`std::runtime_error` and `std::out_of_range` across it: `abstract_file_structure`
+(free and on the Parser), `Parser::abstraction`, `tile`, `tile_planes`,
+`image`, `Parser::open`, `generate_file_map` and the public `Recovery` calls,
+so a consumer had to wrap each in its own `try` and lost IFE's `FileError`
+code on the way. Inside the module the read path still throws; each public
+function catches by type at its boundary and returns the failure under
+`Domain::IRIS_FILE_EXTENSION` with its code, the offending value and the
+location of the throw. Branch `feature/BoundaryResults_R-8`, pull request #11;
+Iris-Slide's call sites move on its branch of the same name, so the
+`downstream` job pairs them. [Api_05, Api_04]
+
+- [x] R-8.1 **Red first.** `tests/ife_boundary_results_tests.cpp` (ctest `ife_boundary_results_tests`, both build systems) calls every converted function in its new form, holds each to its signature and `noexcept` with a `static_assert`, and requires a damaged TILE_TABLE (BAD_VALIDATION, the byte and the value stored), TILE_TABLE.MIP_LEVELS 8 on a 256-pixel UASTC tile (CONFORMANCE), tile 5 and layer 2 (NO_SUCH_TILE), a missing label (NO_SUCH_IMAGE), an unmappable path (NOT_MAPPED) and a four-byte file (NOT_CONSTRUCTED) to return a failure naming the value, with the output untouched. Evidence: the target does not compile against the tree at its commit, first error "no matching function for call to 'abstract_file_structure'"; every other target builds. [e2215b5](https://github.com/Aptix-Bio/Iris-File-Extension/commit/e2215b51701c2ed7dece90ed9cb8fe0d8105c320)
+- [x] R-8.2 **Green.** The read entry points converted (`src/IFE_Failure.hpp`: `Failure`, `boundary()`), five `FileError` members appended, the callers in `tests/`, `examples/` and the README moved, `Recovery::scan` joining its started workers when one cannot start, and the `downstream` job building Iris-Slide's paired branch through an overlay port of this checkout (`cmake/downstream_iris_slide.cmake`). Evidence: ctest 28 of 28 (Release, AppleClang) and 28 of 28 under `ctest --preset asan` (ASan+UBSan), `ife_boundary_results_tests` passing; `--validate`, `--check`, both lints, the review-configuration check and the move's checker pass; actionlint 1.7.12 reports only `release.yml`'s two SC2094 notes (three on main); Iris-Slide's branch `feature/BoundaryResults_R-8` builds against this checkout natively (library, encoder and its tests, arm64 macOS) and as the wasm32-emscripten module; run locally, `cmake/downstream_iris_slide.cmake` exits 0 with HEAD_REF set to this branch (Iris-Slide's paired branch) and 1 with it empty (Iris-Slide main, "does not build against this checkout"). [56f8c83](https://github.com/Aptix-Bio/Iris-File-Extension/commit/56f8c832dbc9224e51073020f33c51721a7dac37)
+
+- [x] R-8.3 **Red first: the review findings and the decisions of 2026-11-26.** `Parser::open` becomes `create_parser(const ParserDesc&, Parser&)`; `boundary()` returns a `std::system_error` as SYSTEM_ERROR; after a green build of Iris-Slide's paired branch the `downstream` job also builds Iris-Slide main and fails a coordinated change until both pull requests merge. Evidence: `ife_boundary_results_tests` and `ife_parser_tests` fail to compile ("use of undeclared identifier 'create_parser'", "no member named 'SYSTEM_ERROR'"); `cmake -P cmake/tests/downstream_iris_slide_test.cmake` fails all six cases against the script at [0a18ed9](https://github.com/Aptix-Bio/Iris-File-Extension/commit/0a18ed98c90983616b64719b19ea92b4037d1db0). [32b388c](https://github.com/Aptix-Bio/Iris-File-Extension/commit/32b388c0b8a9f377248c9df05e2ab799566d102b)
+- [x] R-8.4 **Green.** `create_parser` and `ParserDesc` replace `Parser::open`; FileError appends SYSTEM_ERROR; `cmake/downstream_iris_slide.cmake` gives Iris-Headers' verdict (a control build against the base, then Iris-Slide main after a green paired build, naming Iris-Slide's pull request on a coordinated change), the job checks out the base and installs only the tools vcpkg cannot fetch, and the spec job runs the verdict test; calls that write an output are statements before their check. Evidence: ctest 28 of 28 (Release, AppleClang) and under ASan+UBSan; the verdict test passes all six cases; `--validate`, `--check`, both lints, the review-configuration check and actionlint as at R-8.2. The thread-join path of `Recovery::scan` has no test: provoking `std::thread`'s constructor to throw needs the process's thread limit exhausted, which a test cannot do portably; `boundary()`'s SYSTEM_ERROR mapping, which that path reaches, is tested. Run locally against Iris-Slide's paired branch and IFE main as the base, the downstream script reports "A coordinated change: merging this breaks Iris-Slide main until Iris-Slide#4 merges" and exits 1, as intended. [06ec6f2](https://github.com/Aptix-Bio/Iris-File-Extension/commit/06ec6f28cd59ddf997e3dafc588054affc8f9da8)
+
+- [x] R-8.5 **Review findings on #11 (run 45833439064).** The downstream script takes the token out of its environment before any child process runs, so neither Iris-Slide's scripts nor vcpkg's port builds inherit it; it refuses a HEAD_REF holding `;`, which a CMake list would split, and passes the branch quoted; the job's tool install is one `cmake -P cmake/downstream_tools.cmake`; development/style_guide.md, Naming, states the `create_<name>(const <Name>Desc&, <Name>&)` form D30 cites. Evidence: the verdict test's new `semicolon` case fails against the script at [35a74dc](https://github.com/Aptix-Bio/Iris-File-Extension/commit/35a74dc79459914bcae9807c9bc3b76493caaa74) (the clone proceeds and the message names no `;`) and passes with the change, 7 of 7 cases; actionlint, the review-configuration check and both lints as at R-8.4; CI run 45833446903 at [35a74dc](https://github.com/Aptix-Bio/Iris-File-Extension/commit/35a74dc79459914bcae9807c9bc3b76493caaa74) reports the coordinated change in `Iris-Slide builds against this branch`, as intended. [0d5cb50](https://github.com/Aptix-Bio/Iris-File-Extension/commit/0d5cb50471df3076c3a32a9f0b56cfdd292a236d)
+
+## R-9 — The Builder's public API returns a `Result` `todo`
+
+The rule R-8 applies to the read path holds for the write handle too
+(development/style_guide.md, Errors): `Builder::create`, `set_tile_table`,
+`append_tile`, `append_null_tile`, `append_image`, `append_clinical`,
+`tile_offsets`, `finalize` and the `Builder_t` block tier throw
+`std::logic_error`, `std::invalid_argument`, `std::out_of_range`,
+`std::runtime_error` and `std::system_error` across it (43 `throw` sites in
+`src/IFE_Builder.cpp`), and `Parser`'s borrowing constructor can throw
+`std::bad_alloc`. Each becomes `noexcept`, returning a `Result` and writing
+what it produces (an offset, a handle, the placements) through an output
+reference, and Iris-Slide's encoder moves with it on a paired branch. Before
+R-4, so the bindings translate one error mechanism. [Api_06]
+
+- [ ] R-9.1 **Red first.** A test that each Builder entry point is `noexcept`
+      and that a call out of order, a retired encoding and an exhausted arena
+      return a failure `Result` naming the value.
+- [ ] R-9.2 **Green.**
+
 ## ZC — The read path as a const lens `todo`
 
 D14: read-path metadata and entry access are `std::span<const T>` over static
@@ -520,6 +569,13 @@ Collected from the retired documents' "not blocking" and "deferred" notes.
   cannot be reproduced from a tag. Pin before a revision is ratified from a
   build.
 
+- [ ] **BL-8 — The recovery benchmark builds again or is retired.**
+  `tests/ife_recovery_bench_tests.cpp` is registered in neither
+  `tests/tests.cmake` nor `tests/tests.bzl`, and calls
+  `Recovery::reachable_blocks()`, which the recovery rebuild removed (RB-3), so
+  it compiles nowhere. Port it to the census (`Recovery::census`, R-8's `Result`
+  form) and register it in both build systems, or delete it with the reason.
+  Found 2026-11-25 (R-8).
 ---
 
 ## Closed work
@@ -557,3 +613,18 @@ right holds it in full, as written.
 | RB-2 | 2026-09-28 | The generated reference table `reference_fields_view`: 16 edges, all exercised by the corpus | [recovery rebuild](analysis/recovery_rebuild_2026-09-28.md) |
 | RB-3 | 2026-09-28 | One walk (`slots_of`) and the census: 47,744 flips, every point explained (Recovery_01) | [recovery rebuild](analysis/recovery_rebuild_2026-09-28.md) |
 | Handle layer | 2026-09-30 | `Builder` and `Parser`, the `Iris::File::` namespace, the caller-owned layout; Iris-Slide's encoder moved onto the Builder with byte-identical output (D6 to D11) | [handle layer](analysis/handle_layer_2026-09-28.md) |
+
+## Session log
+
+- **2026-11-26, R-8.** The public read API stopped throwing across its
+  boundary: every read entry point is `noexcept`, returns a `Result` and writes
+  its value through a reference (R-8.1, R-8.2), with Iris-Slide's call sites on
+  its paired branch (Iris-Slide#4). The `downstream` job had been building
+  Iris-Slide's pinned IFE commit and now builds through its overlay port. The
+  maintainer's decisions of 2026-11-26 and the review findings on #11 followed
+  (R-8.3, R-8.4): `create_parser`, SYSTEM_ERROR, the coordinated-change
+  verdict, CI-2.4 amended, BL-8 opened. #11's `downstream` job fails as a
+  coordinated change until Iris-Slide#4 merges, as intended.
+  **Next:** the maintainer's VERIFY of R-8; merge #11, re-pin Iris-Slide#4's
+  IFE port to #11's commit on `main` if the merge rewrote it, and merge #4;
+  then R-9 (the Builder's API).

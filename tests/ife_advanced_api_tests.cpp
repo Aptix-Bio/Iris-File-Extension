@@ -35,7 +35,8 @@ int g_failures = 0;
 // ---------------------------------------------------------------------------
 // The advanced entry points and their return type.
 // ---------------------------------------------------------------------------
-static_assert(std::is_same_v<decltype(generate_file_map(std::declval<const FileAccessInfo&>())), Abstraction::FileMap>);
+static_assert(std::is_same_v<decltype(generate_file_map(std::declval<const FileAccessInfo&>(),
+                                                         std::declval<Abstraction::FileMap&>())), Result>);
 
 // The advanced global aliases mirror their namespaced types.
 static_assert(std::is_same_v<IFE_MapEntryType, Abstraction::MapEntryType>);
@@ -62,26 +63,24 @@ void touch_advanced_members(Abstraction::FileMap& map) {
 }
 
 // ---------------------------------------------------------------------------
-// Runtime smoke: a non-Iris buffer is handled without crashing. The producers
-// may throw (an unreadable header) — the point is that they do not crash and
-// do not invent entries.
+// Runtime smoke: a non-Iris buffer is handled without crashing. The producer
+// may fail (an unreadable header) — the point is that it does not crash, and
+// that a failure leaves the map empty.
 // ---------------------------------------------------------------------------
 void smoke() {
     BYTE buffer[256];
     std::memset(buffer, 0, sizeof buffer);
     const FileAccessInfo info{buffer, sizeof buffer};
 
-    try {
-        (void)generate_file_map(info);
-    } catch (const std::exception&) {
-    }
+    Abstraction::FileMap map;
+    if (generate_file_map(info, map).failed()) IFE_CHECK(map.empty());
 
-    // A zero-length mapping is a legal "no bytes" query.
+    // A zero-length mapping is a legal "no bytes" query, and the header does
+    // not fit in it.
     const FileAccessInfo empty{nullptr, 0};
-    try {
-        (void)generate_file_map(empty);
-    } catch (const std::exception&) {
-    }
+    Abstraction::FileMap none;
+    IFE_CHECK(generate_file_map(empty, none).failed());
+    IFE_CHECK(none.empty());
 }
 
 }  // namespace
