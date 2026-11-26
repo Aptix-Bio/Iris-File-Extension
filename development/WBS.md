@@ -232,7 +232,7 @@ rubric is a code-owner file read from the default branch, so this merges
 before TE-3's pull request is reviewed: #11, then this, then TE-3. Branch
 `docs/ReviewRubric_1`.
 
-- [x] ReviewRubric_1.1 **The MinimumSurface guidance is narrowed.** `.github/review/rubric.toml`, item MinimumSurface. A document change, with no red step. Evidence: `cmake -P cmake/check_review_configuration.cmake` passes.
+- [x] ReviewRubric_1.1 **The MinimumSurface guidance is narrowed.** `.github/review/rubric.toml`, item MinimumSurface. A document change, with no red step. Evidence: `cmake -P cmake/check_review_configuration.cmake` passes. [9ec18a9](https://github.com/Aptix-Bio/Iris-File-Extension/commit/9ec18a90ad379e91c5f5ab80c09c9bd9ee74dfae)
 - [ ] ReviewRubric_1.2 **VERIFY:** the maintainer reviews the rubric change (CODEOWNERS).
 
 ## VL-1 — The validation layer's diagnostic sink under a multithreaded writer `todo` (P1, latent)
