@@ -101,8 +101,14 @@ values are derived from spec/*.json by the generator; a hand-written copy of one
 or tests/ fails. The vocabulary Iris-Headers provides (Result, Buffer, Memory and the rest) is
 reused, never re-implemented. IFE defines byte structure only: compression, decompression, colour handling and
 anything that interprets a tile stream belong to Iris-Slide (CLAUDE.md, "Tile stream contents are
-not this library's business") and fail here. A new public header, exported symbol or build option
-is justified in the description.
+not this library's business") and fail here. One reading is allowed: a reader that takes syntax
+elements from a tile stream's own header (an AV1 sequence header) to check that they agree with
+IFE's blocks, where each agreement is an entry of the schema's `external_check` section in
+spec/ife_fields.json and its comparison is generated from it (decided 2026-11-26, D31). Such a
+reader walks the stream only as far as the elements the section names. Code that decodes or
+transforms tile pixel data, converts its colour, or checks a rule of the stream's own that no IFE
+field states still fails. A new public header, exported symbol or build option is justified in
+the description.
 """
 
 [[item]]
