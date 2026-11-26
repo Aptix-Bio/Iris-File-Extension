@@ -41,12 +41,13 @@ namespace Iris::File::detail {
  * OBUs before it are stepped over by their obu_size, whatever their type.
  * Success leaves @p fields holding every element; a failure is CONFORMANCE on
  * TILE_PIXEL_DATA, `field` naming what could not be read and `found` the
- * value or length met there, and writes the reason to @p hooks' diagnostic.
+ * value or length met there, and writes the message to @p hooks' diagnostic in
+ * the external checks' one form; @p at is the stream's offset in the file.
  *
  * Preconditions: @p stream addresses @p size readable bytes (it may be null
  * only when @p size is 0); @p hooks may be null.
  */
-[[nodiscard]] inline blocks::Status read_av1_stream(const BYTE* stream, Size size,
+[[nodiscard]] inline blocks::Status read_av1_stream(const BYTE* stream, Size size, Offset at,
                                                     blocks::Av1StreamFields& fields,
                                                     const blocks::ValidationHooks* hooks) noexcept;
 
@@ -84,12 +85,49 @@ inline constexpr std::uint64_t MC_IDENTITY                 = 0;
 inline constexpr std::uint64_t MC_UNSPECIFIED              = 2;
 inline constexpr std::uint64_t FULL_SWING                  = 1;
 
-/// A stream the walk cannot read: CONFORMANCE on TILE_PIXEL_DATA.
-[[nodiscard]] inline blocks::Status unreadable(const blocks::ValidationHooks* hooks, const char* field,
-                                               std::uint64_t found, std::uint64_t expected,
-                                               const char* why) noexcept {
-    if (hooks != nullptr && hooks->diagnostic != nullptr) *hooks->diagnostic = why;
-    return {blocks::Check::CONFORMANCE, "TILE_PIXEL_DATA", field, found, expected, 0};
+/// Where a stream the walk cannot read is reported: against TILE_PIXEL_DATA,
+/// under the clause the external checks cite.
+inline constexpr const char* STREAM_BLOCK = "TILE_PIXEL_DATA";
+inline constexpr const char* CLAUSE       = "ife-tile-av1";
+
+/// A stream the walk cannot read: CONFORMANCE on TILE_PIXEL_DATA, its
+/// diagnostic in the external checks' one form (`report_external_check`).
+/// `found` and `expected` go into the Status; `d` holds the message's parts.
+[[nodiscard]] inline blocks::Status unreadable(const blocks::ValidationHooks* hooks, Offset at,
+                                               blocks::ExternalDisagreement d, std::uint64_t found,
+                                               std::uint64_t expected) noexcept {
+    d.specification = "AV1";
+    d.ife_field     = STREAM_BLOCK;
+    d.clause        = CLAUSE;
+    blocks::report_external_check(hooks, at, d);
+    return {blocks::Check::CONFORMANCE, STREAM_BLOCK, d.element, found, expected, at};
+}
+
+/// The parts of a message for an element the stream or OBU ends inside.
+[[nodiscard]] constexpr blocks::ExternalDisagreement cut_off(const char* element, Size within,
+                                                             const char* after, const char* section) noexcept {
+    blocks::ExternalDisagreement d;
+    d.element         = element;
+    d.found_text      = "cut off";
+    d.expected_before = "all of it within the ";
+    d.expected        = within;
+    d.expected_after  = after;
+    d.section         = section;
+    return d;
+}
+
+/// The parts of a message for an element whose value is refused.
+[[nodiscard]] constexpr blocks::ExternalDisagreement refused(const char* element, std::uint64_t found,
+                                                             const char* before, std::uint64_t expected,
+                                                             const char* after, const char* section) noexcept {
+    blocks::ExternalDisagreement d;
+    d.element         = element;
+    d.found           = found;
+    d.expected_before = before;
+    d.expected        = expected;
+    d.expected_after  = after;
+    d.section         = section;
+    return d;
 }
 
 /// f(n) and uvlc() over one OBU's payload, most significant bit first
@@ -256,74 +294,74 @@ inline void read_sequence_header(SyntaxReader& r, blocks::Av1StreamFields& out) 
     read_color_config(r, out);
 }
 
-/// leb128() (section 4.10.5) at `at`, advancing it past the bytes read.
-[[nodiscard]] inline blocks::Status read_leb128(const BYTE* stream, Size size, Size& at, std::uint64_t& value,
-                                                const blocks::ValidationHooks* hooks) noexcept {
+/// leb128() (section 4.10.5) at `cursor`, advancing it past the bytes read;
+/// `at` is the stream's offset in the file, for the message.
+[[nodiscard]] inline blocks::Status read_leb128(const BYTE* stream, Size size, Size& cursor, std::uint64_t& value,
+                                                Offset at, const blocks::ValidationHooks* hooks) noexcept {
     value = 0;
     for (unsigned i = 0; i < LEB128_MAX_BYTES; ++i) {
-        if (at == size)
-            return unreadable(hooks, "obu_size", size, 0, "TILE_PIXEL_DATA under TILE_ENCODING_AV1 ends inside an obu_size.");
-        const unsigned byte = stream[at++];
+        if (cursor == size)
+            return unreadable(hooks, at, cut_off("obu_size", size, " bytes of the stream", "4.10.5"), size, 0);
+        const unsigned byte = stream[cursor++];
         value |= std::uint64_t{byte & LEB128_PAYLOAD} << (i * 7);
         if ((byte & LEB128_MORE) == 0) break;
-        if (i + 1 == LEB128_MAX_BYTES)
-            return unreadable(hooks, "leb128_byte", byte, byte & LEB128_PAYLOAD,
-                              "TILE_PIXEL_DATA under TILE_ENCODING_AV1 has an obu_size longer than the "
-                              "8 bytes leb128 allows (AV1 section 4.10.5).");
+        if (i + 1 == LEB128_MAX_BYTES) {
+            blocks::ExternalDisagreement d = refused("leb128_byte", byte, "", 0, "", "4.10.5");
+            d.expected_text = "a value below 128 on the eighth byte";
+            return unreadable(hooks, at, d, byte, byte & LEB128_PAYLOAD);
+        }
     }
     if (value > LEB128_MAX)
-        return unreadable(hooks, "obu_size", value, LEB128_MAX,
-                          "TILE_PIXEL_DATA under TILE_ENCODING_AV1 has an obu_size above 2^32 - 1 "
-                          "(AV1 section 4.10.5).");
+        return unreadable(hooks, at, refused("obu_size", value, "at most ", LEB128_MAX, "", "4.10.5"),
+                          value, LEB128_MAX);
     return {};
 }
 
 }  // namespace av1
 
-[[nodiscard]] inline blocks::Status read_av1_stream(const BYTE* stream, Size size,
+[[nodiscard]] inline blocks::Status read_av1_stream(const BYTE* stream, Size size, Offset at,
                                                     blocks::Av1StreamFields& fields,
                                                     const blocks::ValidationHooks* hooks) noexcept {
     // Every pass consumes at least the header byte, so the walk ends.
-    Size at = 0;
+    Size cursor = 0;
     while (true) {
-        if (at == size)
-            return av1::unreadable(hooks, "sequence_header_obu", size, 0,
-                                   "TILE_PIXEL_DATA under TILE_ENCODING_AV1 ends before its first "
-                                   "sequence_header_obu.");
-        const unsigned header = stream[at++];
+        if (cursor == size) {
+            blocks::ExternalDisagreement d =
+                av1::refused("sequence_header_obu", 0, "one within the ", size, " bytes of the stream", "5.5.1");
+            d.found_text = "absent";
+            return av1::unreadable(hooks, at, d, size, 0);
+        }
+        const unsigned header = stream[cursor++];
         if ((header & av1::FORBIDDEN_BIT) != 0)
-            return av1::unreadable(hooks, "obu_forbidden_bit", 1, 0,
-                                   "TILE_PIXEL_DATA under TILE_ENCODING_AV1 has an OBU whose "
-                                   "obu_forbidden_bit is set (AV1 section 6.2.2).");
+            return av1::unreadable(hooks, at, av1::refused("obu_forbidden_bit", 1, "", 0, "", "5.3.2"), 1, 0);
         if ((header & av1::HAS_SIZE_FIELD) == 0)
-            return av1::unreadable(hooks, "obu_has_size_field", 0, 1,
-                                   "TILE_PIXEL_DATA under TILE_ENCODING_AV1 has an OBU with no obu_size, "
-                                   "which the Low Overhead Bitstream Format requires (AV1 section 5.2).");
+            return av1::unreadable(hooks, at, av1::refused("obu_has_size_field", 0, "", 1, "", "5.2"), 0, 1);
         if ((header & av1::EXTENSION_FLAG) != 0) {
-            if (at == size)
-                return av1::unreadable(hooks, "obu_extension_header", size, 0,
-                                       "TILE_PIXEL_DATA under TILE_ENCODING_AV1 ends inside an "
-                                       "obu_extension_header.");
-            ++at;
+            if (cursor == size)
+                return av1::unreadable(hooks, at,
+                                       av1::cut_off("obu_extension_header", size, " bytes of the stream", "5.3.3"),
+                                       size, 0);
+            ++cursor;
         }
         std::uint64_t        obu_size = 0;
-        const blocks::Status length   = av1::read_leb128(stream, size, at, obu_size, hooks);
+        const blocks::Status length   = av1::read_leb128(stream, size, cursor, obu_size, at, hooks);
         if (!length) return length;
-        if (obu_size > size - at)
-            return av1::unreadable(hooks, "obu_size", obu_size, size - at,
-                                   "TILE_PIXEL_DATA under TILE_ENCODING_AV1 has an obu_size past the end "
-                                   "of the tile byte-stream.");
+        if (obu_size > size - cursor)
+            return av1::unreadable(hooks, at,
+                                   av1::refused("obu_size", obu_size, "at most ", size - cursor, ", the bytes left",
+                                                "5.3.1"),
+                                   obu_size, size - cursor);
         if (((header >> av1::TYPE_SHIFT) & av1::TYPE_MASK) != av1::OBU_SEQUENCE_HEADER) {
-            at += obu_size;
+            cursor += obu_size;
             continue;
         }
-        av1::SyntaxReader reader(stream + at, obu_size);
+        av1::SyntaxReader reader(stream + cursor, obu_size);
         blocks::Av1StreamFields read;
         av1::read_sequence_header(reader, read);
         if (reader.ended() != nullptr)
-            return av1::unreadable(hooks, reader.ended(), obu_size, 0,
-                                   "TILE_PIXEL_DATA under TILE_ENCODING_AV1 has a sequence_header_obu "
-                                   "that ends before the elements external_check compares.");
+            return av1::unreadable(hooks, at,
+                                   av1::cut_off(reader.ended(), obu_size, "-byte sequence_header_obu", "5.5"),
+                                   obu_size, 0);
         fields = read;
         return {};
     }

@@ -154,7 +154,7 @@ def main() -> int:
     for comparison in _AV1_COMPARISONS:
         if f"if ({comparison})" not in cpp:
             failures.append(f"check_av1_stream does not test `{comparison}`")
-    if "::Iris::File::detail::read_av1_stream(stream, size, fields, hooks)" not in layer:
+    if "::Iris::File::detail::read_av1_stream(stream, size, at, fields, hooks)" not in layer:
         failures.append("check_tile_stream does not read the AV1 stream")
     if layer.count("read_av1_stream(") != 1:
         failures.append("check_tile_stream reads the AV1 stream under more than one tile encoding")

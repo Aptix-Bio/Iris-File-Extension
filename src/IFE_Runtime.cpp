@@ -556,13 +556,15 @@ Result IFE_EXPORT validate_file_structure(const FileAccessInfo& __info) noexcept
                 b::ValidationHooks sink{};
                 sink.diagnostic = &why;
                 b::Av1StreamFields fields;
-                b::Status status = detail::read_av1_stream(__info.file_ptr + offset, size, fields, &sink);
+                b::Status status = detail::read_av1_stream(__info.file_ptr + offset, size, offset, fields, &sink);
                 if (status) status = b::check_av1_stream(fields, length, planes, offset, &sink);
-                if (!status)
-                    stream_error = "Layer " + std::to_string(layer) + ", tile " + std::to_string(tile) +
-                                   " (OFFSET " + std::to_string(offset) + ", SIZE " + std::to_string(size) +
-                                   ", " + std::to_string(planes) + (planes == 1 ? " plane" : " planes") +
-                                   "): " + status.field + " " + std::to_string(status.found) + ". " + why;
+                if (status) return;
+                // The generated message, after the layer and tile; out of
+                // memory it is empty, and the Status names the element.
+                if (why.empty())
+                    why = "OFFSET " + std::to_string(offset) + ": AV1 " + status.field + " is " +
+                          std::to_string(status.found);
+                stream_error = "Layer " + std::to_string(layer) + ", tile " + std::to_string(tile) + ", " + why;
             });
         if (!tiles.empty()) return failure(FileError::BAD_TILE_ENTRY, tiles);
         if (const std::string mips = mip_levels_error(table, length); !mips.empty())

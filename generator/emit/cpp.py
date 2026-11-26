@@ -1724,6 +1724,9 @@ def emit_blocks_source(
         "// drag the byte-level primitives in transitively.",
         '#include "IFE_Primitives.hpp"',
         "",
+        "#include <new>      // std::bad_alloc, which report_external_check catches",
+        "#include <string>",
+        "",
         "namespace Iris::File {",
         "namespace blocks {",
     ]
@@ -1989,15 +1992,81 @@ def _external_condition(check: dict[str, Any]) -> tuple[str, str]:
     raise SpecError(f"external_check: unknown relation {relation!r}")
 
 
-def _external_diagnostic(spec_name: str, check: dict[str, Any]) -> str:
-    text = (f"{spec_name} {check['field']} shall {check['requirement']}, to agree with "
-            f"{check['ife_field']}. Per the {spec_name} specification, section {check['section']}, "
-            f"and the IFE specification, clause {check['clause']}.")
-    return text.replace('"', "'")
+def _external_report(spec_name: str, check: dict[str, Any], expected: str) -> str:
+    """The ExternalDisagreement a failed check reports: every part of the
+    diagnostic comes from the entry's fields, and the IFE field is followed by
+    its value where the check is given one (EXTERNAL_CONTEXT)."""
+    context = EXTERNAL_CONTEXT.get(check["ife_field"])
+    expected_text = (
+        '"' + " or ".join(str(v) for v in check["values"]) + '"' if check["relation"] == "one_of" else "nullptr"
+    )
+    return (
+        f'{{"{spec_name}", "{check["field"]}", fields.{check["field"]}, nullptr, "{check["ife_field"]}", '
+        f'{"true" if context else "false"}, {context or 0}, {expected_text}, "", {expected}, "", '
+        f'"{check["section"]}", "{check["clause"]}"}}'
+    )
+
+
+_REPORT_DECLARATION = [
+    "",
+    "// ---- external_check: the one diagnostic form ----",
+    "/// A disagreement between an external stream and IFE's blocks, unformatted.",
+    "/// Each part comes from an external_check entry, or, for a stream its reader",
+    "/// cannot walk, from the reader; `found_text` and `expected_text`, when not",
+    "/// null, replace the numbers.",
+    "struct ExternalDisagreement {",
+    '    const char*   specification   = "";',
+    '    const char*   element         = "";',
+    "    std::uint64_t found           = 0;",
+    "    const char*   found_text      = nullptr;",
+    '    const char*   ife_field       = "";',
+    "    bool          ife_value_known = false;",
+    "    std::uint64_t ife_value       = 0;",
+    "    const char*   expected_text   = nullptr;",
+    '    const char*   expected_before = "";',
+    "    std::uint64_t expected        = 0;",
+    '    const char*   expected_after  = "";',
+    '    const char*   section         = "";',
+    '    const char*   clause          = "";',
+    "};",
+    "",
+    "/// Write @p d to @p hooks' diagnostic, when it has one, in the one form",
+    "/// `OFFSET <at>: <specification> <element> is <found>; <IFE field> [<value>]",
+    "/// requires <expected> (<specification> section-sign <section>, <<clause>>)`.",
+    "/// Out of memory, the diagnostic is left empty; the Status carries the failure.",
+    "void report_external_check(const ValidationHooks* hooks, ::Iris::File::Offset at,",
+    "                           const ExternalDisagreement& d) noexcept;",
+]
+
+_REPORT_DEFINITION = [
+    "",
+    "// ---- external_check: the one diagnostic form ----",
+    "IFE_BLOCKS_LINKAGE void report_external_check(const ValidationHooks* hooks, ::Iris::File::Offset at,",
+    "                                              const ExternalDisagreement& d) noexcept {",
+    "    if (hooks == nullptr || hooks->diagnostic == nullptr) return;",
+    "    try {",
+    '        std::string text = "OFFSET " + std::to_string(at) + ": " + d.specification + " " + d.element + " is ";',
+    "        text += d.found_text != nullptr ? std::string(d.found_text) : std::to_string(d.found);",
+    '        text += std::string("; ") + d.ife_field;',
+    '        if (d.ife_value_known) text += " " + std::to_string(d.ife_value);',
+    '        text += " requires ";',
+    "        if (d.expected_text != nullptr) text += d.expected_text;",
+    "        else text += d.expected_before + std::to_string(d.expected) + d.expected_after;",
+    "        // The section sign as UTF-8 bytes, whatever the execution character set.",
+    '        text += std::string(" (") + d.specification + " \\xC2\\xA7" + d.section + ", <<" + d.clause + ">>)";',
+    "        *hooks->diagnostic = std::move(text);",
+    "    } catch (const std::bad_alloc&) {",
+    "        hooks->diagnostic->clear();   // the Status still names the element and its value",
+    "    }",
+    "}",
+]
 
 
 def _emit_external_declarations(out: list[str], section: dict[str, Any] | None) -> None:
-    """IFE_Blocks.hpp: each specification's fields struct and check."""
+    """IFE_Blocks.hpp: the one diagnostic form, and each specification's
+    fields struct and check."""
+    if _external_specs(section):
+        out += _REPORT_DECLARATION
     for spec_name, spec in _external_specs(section).items():
         fields, _, reader, header = _external_names(spec_name)
         members: dict[str, None] = {c["field"]: None for c in spec.get("checks", [])}
@@ -2017,7 +2086,8 @@ def _emit_external_declarations(out: list[str], section: dict[str, Any] | None) 
             f"/// IFE's blocks against what a tile's stream reports, under {spec.get('under')},",
             "/// each check in external_check's order. The first disagreement is",
             "/// CONFORMANCE: `block` names the IFE field, `field` the syntax element,",
-            "/// `found` its value; `diagnostic`, when set, receives the requirement.",
+            "/// `found` its value; `diagnostic`, when set, receives the message",
+            "/// report_external_check writes.",
             "/// `tile_length` is TILE_LENGTH resolved (256 where zero); `z_planes` is",
             "/// the tile's plane count (zero and one both mean one plane).",
             "[[nodiscard]] " + _external_signature(spec_name) + ";",
@@ -2025,19 +2095,20 @@ def _emit_external_declarations(out: list[str], section: dict[str, Any] | None) 
 
 
 def _emit_external_definitions(out: list[str], section: dict[str, Any] | None) -> None:
-    """IFE_Blocks.cpp: each check, one comparison per external_check entry."""
+    """IFE_Blocks.cpp: the diagnostic form, and each check, one comparison per
+    external_check entry."""
+    if _external_specs(section):
+        out += _REPORT_DEFINITION
     for spec_name, spec in _external_specs(section).items():
         out += ["", f"// ---- external_check: {spec_name} ----",
                 "IFE_BLOCKS_LINKAGE " + _external_signature(spec_name) + " {"]
-        used = {EXTERNAL_CONTEXT.get(c["ife_field"]) for c in spec.get("checks", [])
-                if c["relation"] in ("plus_one_equals", "equals_when_ife_above")}
+        used = {EXTERNAL_CONTEXT.get(c["ife_field"]) for c in spec.get("checks", [])}
         out += [f"    (void){name};" for name in EXTERNAL_CONTEXT.values() if name not in used]
         for check in spec.get("checks", []):
             condition, expected = _external_condition(check)
             out += [
                 f"    if ({condition}) {{",
-                "        if (hooks != nullptr && hooks->diagnostic != nullptr)",
-                f'            *hooks->diagnostic = "{_external_diagnostic(spec_name, check)}";',
+                f"        report_external_check(hooks, at, {_external_report(spec_name, check, expected)});",
                 f'        return {{Check::CONFORMANCE, "{check["ife_field"]}", "{check["field"]}",',
                 f"                fields.{check['field']}, {expected}, at}};",
                 "    }",
@@ -2077,8 +2148,8 @@ def _emit_tile_stream_check(constants_doc: dict[str, Any], section: dict[str, An
         out += [
             f"        case {enum}::{member}: {{",
             f"            {fields} fields{{}};",
-            f"            const Status read = {reader}(stream, size, fields, hooks);",
-            "            if (!read) return {read.code, read.block, read.field, read.found, read.expected, at};",
+            f"            const Status read = {reader}(stream, size, at, fields, hooks);",
+            "            if (!read) return read;",
             f"            return {check}(fields, tile_length, z_planes, at, hooks);",
             "        }",
         ]

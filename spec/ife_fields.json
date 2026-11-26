@@ -791,7 +791,7 @@
   },
   "// MARK: - EXTERNAL CHECKS": "IFE fields cross-checked against a tile byte-stream's own header (D31).",
   "external_check": {
-    "description": "Cross-checks between IFE's blocks and what an external specification's stream reports about the same facts (decided 2026-11-26, D31). IFE does not validate the external stream: each check reads one syntax element from a tile byte-stream and requires it to agree with an IFE field. The generator emits the comparisons and their diagnostics from this section into the block layer, where validate_file_structure and the conformance layer's check_tile_stream run them; a reader per specification, include/IFE_<Specification>.hpp, walks the stream only as far as the elements named here. Relations: equals (the element is `value`), one_of (one of `values`), plus_one_equals (the element plus one is the IFE field), equals_when_ife_above (the element is `value` wherever the IFE field exceeds `threshold`).",
+    "description": "Cross-checks between IFE's blocks and what an external specification's stream reports about the same facts (decided 2026-11-26, D31). IFE does not validate the external stream: each check reads one syntax element from a tile byte-stream and requires it to agree with an IFE field. The generator emits the comparisons and their diagnostics from this section into the block layer, every diagnostic in one form built from the entry's fields (OFFSET <at>: AV1 <element> is <found>; <IFE field> requires <expected> (AV1 section, clause)), the rule's prose being the specification's and the field descriptions'; where validate_file_structure and the conformance layer's check_tile_stream run them; a reader per specification, include/IFE_<Specification>.hpp, walks the stream only as far as the elements named here. Relations: equals (the element is `value`), one_of (one of `values`), plus_one_equals (the element plus one is the IFE field), equals_when_ife_above (the element is `value` wherever the IFE field exceeds `threshold`).",
     "AV1": {
       "title": "AV1 Bitstream and Decoding Process Specification",
       "url": "https://aomediacodec.github.io/av1-spec/",
@@ -804,16 +804,14 @@
           "field": "max_frame_width_minus_1",
           "section": "5.5.1",
           "relation": "plus_one_equals",
-          "clause": "ife-tile-av1",
-          "requirement": "be TILE_LENGTH - 1, so every decoded frame is at most TILE_LENGTH pixels wide"
+          "clause": "ife-tile-av1"
         },
         {
           "ife_field": "TILE_TABLE.TILE_LENGTH",
           "field": "max_frame_height_minus_1",
           "section": "5.5.1",
           "relation": "plus_one_equals",
-          "clause": "ife-tile-av1",
-          "requirement": "be TILE_LENGTH - 1, so every decoded frame is at most TILE_LENGTH pixels high"
+          "clause": "ife-tile-av1"
         },
         {
           "ife_field": "TILE_TABLE.TILE_LENGTH",
@@ -821,8 +819,7 @@
           "section": "5.5.1",
           "relation": "equals",
           "value": 0,
-          "clause": "ife-tile-av1",
-          "requirement": "be 0, since superres codes a narrower frame and upscales it (AV1 section 7.16), changing the decoded width TILE_LENGTH states"
+          "clause": "ife-tile-av1"
         },
         {
           "ife_field": "TILE_TABLE.ENCODING",
@@ -833,8 +830,7 @@
             0,
             1
           ],
-          "clause": "ife-tile-av1",
-          "requirement": "be 0 (4:2:0) or 1 (4:4:4), the profiles of the 8-bit three-plane colour TILE_ENCODING_AV1 declares"
+          "clause": "ife-tile-av1"
         },
         {
           "ife_field": "TILE_TABLE.ENCODING",
@@ -842,8 +838,7 @@
           "section": "5.5.2",
           "relation": "equals",
           "value": 0,
-          "clause": "ife-tile-av1",
-          "requirement": "be 0: TILE_ENCODING_AV1 declares 8-bit samples"
+          "clause": "ife-tile-av1"
         },
         {
           "ife_field": "TILE_TABLE.ENCODING",
@@ -851,8 +846,7 @@
           "section": "5.5.2",
           "relation": "equals",
           "value": 0,
-          "clause": "ife-tile-av1",
-          "requirement": "be 0: TILE_ENCODING_AV1 declares three colour planes"
+          "clause": "ife-tile-av1"
         },
         {
           "ife_field": "TILE_TABLE.ENCODING",
@@ -860,8 +854,7 @@
           "section": "5.5.2",
           "relation": "equals",
           "value": 1,
-          "clause": "ife-tile-av1",
-          "requirement": "be 1, so that matrix_coefficients is coded"
+          "clause": "ife-tile-av1"
         },
         {
           "ife_field": "TILE_TABLE.ENCODING",
@@ -869,8 +862,7 @@
           "section": "5.5.2",
           "relation": "equals",
           "value": 6,
-          "clause": "ife-tile-av1",
-          "requirement": "be 6 (MC_BT_601): TILE_ENCODING_AV1 declares the BT.601 matrix"
+          "clause": "ife-tile-av1"
         },
         {
           "ife_field": "TILE_TABLE.ENCODING",
@@ -878,8 +870,7 @@
           "section": "5.5.2",
           "relation": "equals",
           "value": 1,
-          "clause": "ife-tile-av1",
-          "requirement": "be 1 (full swing): TILE_ENCODING_AV1 declares full range"
+          "clause": "ife-tile-av1"
         },
         {
           "ife_field": "TILE_PIXEL_DATA.Z_PLANES",
@@ -888,8 +879,7 @@
           "relation": "equals_when_ife_above",
           "value": 0,
           "threshold": 1,
-          "clause": "ife-tile-av1",
-          "requirement": "be 0 on a tile of more than one focal plane, since a still picture is one coded frame (AV1 section 6.4.1)"
+          "clause": "ife-tile-av1"
         }
       ]
     }

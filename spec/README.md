@@ -142,8 +142,7 @@ stream: each entry compares one of its syntax elements with an IFE field.
            "under": "TILE_ENCODING_AV1", "stream": "...",
            "checks": [ { "ife_field": "TILE_TABLE.TILE_LENGTH",
                          "field": "max_frame_width_minus_1", "section": "5.5.1",
-                         "relation": "plus_one_equals", "clause": "ife-tile-av1",
-                         "requirement": "be TILE_LENGTH - 1, ..." } ] } }
+                         "relation": "plus_one_equals", "clause": "ife-tile-av1" } ] } }
 ```
 
 | Key | Meaning |
@@ -153,9 +152,21 @@ stream: each entry compares one of its syntax elements with an IFE field.
 | `field`, `section` | the external syntax element and the section of the external specification that defines it |
 | `relation` | `equals` (`value`), `one_of` (`values`), `plus_one_equals` (the element plus one is the IFE field), `equals_when_ife_above` (`value` wherever the IFE field exceeds `threshold`) |
 | `clause` | the IFE clause stating the rule, an anchor `--validate` requires the narrative to declare |
-| `requirement` | the rule in prose, after "shall"; it is the diagnostic |
 
-The vocabulary is closed and `--validate` enforces it. The generator emits
+The vocabulary is closed and `--validate` enforces it. An entry carries no
+prose: the rule is stated in the specification and in the IFE field's
+description, and every diagnostic is generated from the entry's fields in one
+form, `OFFSET <at>: AV1 <element> is <found>; <IFE field> requires
+<expected> (AV1 §<section>, <<clause>>)`, the IFE field followed by its value
+where the check is given one and the whole preceded by `Layer <l>, tile <t>, `
+in `validate_file_structure`.
+
+The IFE fields a relation may compare an element's value with are an explicit
+list, `EXTERNAL_CONTEXT` in `generator/validate.py`: TILE_TABLE.TILE_LENGTH
+and TILE_PIXEL_DATA.Z_PLANES, the values `validate_file_structure` and
+`check_tile_stream` hand the generated check. Adding a field to that list is a
+deliberate change: it adds a parameter to every generated check and to
+`check_tile_stream`, and each caller must supply the value. The generator emits
 each specification's fields struct and check into the block layer
 (`Av1StreamFields`, `check_av1_stream`); a hand-written reader,
 `include/IFE_<Specification>.hpp`, walks the stream only as far as the

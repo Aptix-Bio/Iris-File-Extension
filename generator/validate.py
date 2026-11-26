@@ -805,8 +805,10 @@ EXTERNAL_CONTEXT: dict[str, str] = {
     "TILE_TABLE.TILE_LENGTH": "tile_length",
     "TILE_PIXEL_DATA.Z_PLANES": "z_planes",
 }
+# No `requirement`: every diagnostic is generated from the entry's fields, and
+# the rule's prose lives in the specification and the field descriptions.
 _EXTERNAL_CHECK_KEYS = {"ife_field", "field", "section", "relation", "value", "values",
-                        "threshold", "clause", "requirement"}
+                        "threshold", "clause"}
 _EXTERNAL_SPEC_KEYS = {"title", "url", "read", "under", "stream", "checks"}
 
 
@@ -860,7 +862,7 @@ def _external_check_problems(
                 continue
             for key in sorted(set(check) - _EXTERNAL_CHECK_KEYS):
                 problems.append(f"{at}: unknown key {key!r}")
-            for key in ("ife_field", "field", "section", "relation", "clause", "requirement"):
+            for key in ("ife_field", "field", "section", "relation", "clause"):
                 if not isinstance(check.get(key), str) or not check.get(key):
                     problems.append(f"{at}: {key} is missing or empty")
             if check.get("ife_field") not in declared:
