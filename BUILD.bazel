@@ -138,6 +138,7 @@ cc_library(
         "src/IFE_Builder.cpp",
         "src/IFE_Parser.cpp",
         "src/IFE_Window.cpp",
+        "src/IFE_Failure.hpp",   # private: how a failure leaves the module (R-8)
     ],
     hdrs = [":src_headers", ":generated_headers"],
     copts = _COPTS,
@@ -217,6 +218,7 @@ cc_binary(
         "examples/slide_info_abstraction.cpp",
         "src/IFE_Runtime.cpp",
         "src/IFE_Window.cpp",
+        "src/IFE_Failure.hpp",
         ":src_headers",
         ":generated_headers",
     ],

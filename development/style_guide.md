@@ -158,6 +158,15 @@ debugging detail across its boundary.
   `Iris::Domain::IRIS_FILE_EXTENSION`, an error code, the offending value and
   where it failed. Boundary functions are `noexcept`, so an exception that
   escapes terminates loudly in a test instead of unwinding into foreign code.
+- **A boundary that produces a value writes it through an output reference**
+  and still returns the `Result` (decided 2026-11-25):
+  `Result abstract_file_structure(const FileAccessInfo&, Abstraction::File&)
+  noexcept`. The output is written only on success, so a failed call leaves it
+  as the caller had it. There is no value-carrying result type (no
+  `ResultOf<T>`, `Expected<T>` or `std::expected`), and none is added: one
+  mechanism serves every boundary. Each public function's body runs inside
+  `boundary()` (`src/IFE_Failure.hpp`), which catches by type: a thrown
+  `Failure` keeps its `FileError` and the place it was thrown.
 - **Every error carries the offending value:** `"unknown encoding: " +
   std::to_string(e)`, never `"bad encoding"`.
 - **Catch specific types.** `catch (...)` appears only as the last handler at a

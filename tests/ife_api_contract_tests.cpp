@@ -55,7 +55,8 @@ static_assert(std::is_integral_v<decltype(FileAccessInfo::file_size)>);
 using IfeResult = decltype(is_iris_slide_file(std::declval<const FileAccessInfo&>()));
 static_assert(std::is_same_v<IfeResult, decltype(validate_file_structure(std::declval<const FileAccessInfo&>()))>);
 static_assert(std::is_same_v<IfeResult, Iris::Result>);  // the codec's `Iris::Result`
-static_assert(std::is_same_v<decltype(abstract_file_structure(std::declval<const FileAccessInfo&>())), Abstraction::File>);
+static_assert(std::is_same_v<IfeResult, decltype(abstract_file_structure(std::declval<const FileAccessInfo&>(),
+                                                                         std::declval<Abstraction::File&>()))>);
 
 // The abstraction members the codec reads straight through.
 static_assert(std::is_same_v<decltype(Abstraction::File::header), Abstraction::Header>);
@@ -108,14 +109,9 @@ void smoke() {
     IFE_CHECK(is_iris_slide_file(info).failed());
     IFE_CHECK(validate_file_structure(info).failed());
 
-    // The read path refuses a damaged file by throwing, per its contract.
-    bool threw = false;
-    try {
-        (void)abstract_file_structure(info);
-    } catch (const std::exception&) {
-        threw = true;
-    }
-    IFE_CHECK(threw);
+    // The read path refuses a damaged file with a failure Result (R-8).
+    Abstraction::File file;
+    IFE_CHECK(abstract_file_structure(info, file).failed());
 
     // A zero-length mapping is a legal "no bytes" query.
     const FileAccessInfo empty{nullptr, 0};

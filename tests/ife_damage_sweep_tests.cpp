@@ -19,7 +19,8 @@
  * FastFHIR's census_single_flip_sweep, and the threat model recovery assumes.
  * Each flipped file goes through is_iris_slide_file, validate_file_structure,
  * generate_file_map, abstract_file_structure and a Parser bound to it, then
- * the bit is flipped back. Throwing is a legitimate answer. The invariants:
+ * the bit is flipped back. A failure Result is a legitimate answer; every
+ * entry point is noexcept (R-8), so a throw would end the sweep. The invariants:
  *
  *   1. an undamaged fixture reads completely (the control: a read path that
  *      refuses a good file is broken, however safe it is);
@@ -78,7 +79,7 @@ bool inside(std::span<const BYTE> span, const std::vector<BYTE>& file) {
 struct Tally {
     std::size_t iterations = 0;
     std::size_t validated  = 0;   ///< validate_file_structure passed
-    std::size_t abstracted = 0;   ///< abstract_file_structure returned
+    std::size_t abstracted = 0;   ///< abstract_file_structure succeeded
 };
 
 /// Invariant 4: what a returned abstraction hands out can be read through.
@@ -94,30 +95,31 @@ void check_abstraction(const Abstraction::File& file, Size file_size) {
 void check_parser(const std::vector<BYTE>& f) {
     const Parser parser(FileAccessInfo{f.data(), f.size()});
     const Abstraction::File* file = nullptr;
-    try { file = &parser.abstraction(); }
-    catch (const std::exception&) { return; }   // refused: already counted by the caller
+    if (parser.abstraction(file).failed()) return;   // refused: already counted by the caller
 
     // The abstraction accepted every tile and image below, so each span must
-    // be producible — a throw here is the Parser disagreeing with it.
+    // be producible — a failure here is the Parser disagreeing with it.
+    std::span<const BYTE> stream;
+    std::uint16_t         planes = 0;
     for (std::uint32_t l = 0; l < file->tileTable.layers.size(); ++l)
         for (std::uint32_t t = 0; t < file->tileTable.layers[l].size(); ++t) {
-            try {
-                IFE_CHECK(inside(parser.tile(l, t), f));
-                (void)parser.tile_planes(l, t);
-            } catch (const std::exception& e) {
+            Result read = parser.tile(l, t, stream);
+            if (read.succeeded()) {
+                IFE_CHECK(inside(stream, f));
+                read = parser.tile_planes(l, t, planes);
+            }
+            if (read.failed()) {
                 std::fprintf(stderr, "FAIL: layer %u, tile %u was accepted, then refused: %s\n",
-                             l, t, e.what());
+                             l, t, read.message.c_str());
                 ++g_failures;
             }
         }
     for (const auto& [label, image] : file->images) {
-        try {
-            IFE_CHECK(inside(parser.image(label), f));
-        } catch (const std::exception& e) {
+        const Result read = parser.image(label, stream);
+        IFE_CHECK(read.succeeded() && inside(stream, f));
+        if (read.failed())
             std::fprintf(stderr, "FAIL: image '%s' was accepted, then refused: %s\n",
-                         label.c_str(), e.what());
-            ++g_failures;
-        }
+                         label.c_str(), read.message.c_str());
     }
 }
 
@@ -128,14 +130,12 @@ bool read_path(const std::vector<BYTE>& f, Tally& tally) {
     const bool valid = validate_file_structure(info).succeeded();
     // generate_file_map() records what the offset graph CLAIMS, so over a
     // damaged file an entry past EOF is legitimate. Reading one is not.
-    try { (void)generate_file_map(info); }
-    catch (const std::exception&) {}
+    Abstraction::FileMap map;
+    (void)generate_file_map(info, map);
 
-    bool read = false;
-    try {
-        check_abstraction(abstract_file_structure(info), f.size());
-        read = true;
-    } catch (const std::exception&) {}
+    Abstraction::File file;
+    const bool read = abstract_file_structure(info, file).succeeded();
+    if (read) check_abstraction(file, f.size());
     check_parser(f);
     IFE_CHECK(read || !valid);   // invariant 3
 

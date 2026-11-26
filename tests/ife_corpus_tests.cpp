@@ -126,7 +126,13 @@ std::set<std::string> walk(const ife_corpus::Fixture& fixture,
     // The offset graph is the traversal. It cannot see a TILE_FRAME (a frame
     // carries no recovery tag and is addressed backward from its stream); the
     // recovery census that used to be unioned in here is being rebuilt.
-    auto map = ::Iris::File::generate_file_map({bytes.data(), bytes.size()});
+    ::Iris::File::Abstraction::FileMap map;
+    if (const Iris::Result mapped = ::Iris::File::generate_file_map({bytes.data(), bytes.size()}, map);
+        mapped.failed()) {
+        std::fprintf(stderr, "FAIL: %s: the file map failed: %s\n", fixture.name, mapped.message.c_str());
+        ++g_failures;
+        return observed;
+    }
 
     for (const auto& [offset, entry] : map) {
         const char* name = manifest_name(entry.type);

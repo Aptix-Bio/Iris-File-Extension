@@ -80,7 +80,7 @@ touch different files from the recovery lane and can run beside it.
 | R-4, R-5 | Python and JavaScript/WebAssembly bindings | `todo`, after R-3 (D15) |
 | R-6 | an expectations header for the 1.1 witness | `doing`: the test exists, its record is owed |
 | R-7 | `generate_IFE.py` is the generator's one entry point; the generated layer is built out of the source tree and published with each release | `doing` (pull request #10, stacked on #9) |
-| R-8 | no exception crosses the public read API: every read entry point is `noexcept`, returns a `Result` and writes its value through an output reference | `doing` (pull request #11, stacked on #10; Iris-Slide's call sites on its paired branch) |
+| R-8 | no exception crosses the public read API: every read entry point is `noexcept`, returns a `Result` and writes its value through an output reference | `doing` (pull request #11; Iris-Slide's call sites on its paired branch) |
 | R-9 | the Builder's public API returns a `Result` in the same form | `todo`, before R-4 |
 | ZC-1 to ZC-5 | the read path as a const lens (D14) | `todo` |
 | BL-1 to BL-7 | carried forward, none gating the release | `todo` |
@@ -489,17 +489,10 @@ function catches by type at its boundary and returns the failure under
 `Domain::IRIS_FILE_EXTENSION` with its code, the offending value and the
 location of the throw. Branch `feature/BoundaryResults_R-8`, pull request #11;
 Iris-Slide's call sites move on its branch of the same name, so the
-`downstream` job pairs them. [Read_06]
+`downstream` job pairs them. [Api_05, Api_04]
 
-- [ ] R-8.1 **Red first.** `tests/ife_boundary_results_tests.cpp` (ctest
-      `ife_boundary_results_tests`) calls every converted function in its new
-      form, holds each to `noexcept` with a `static_assert`, and requires a
-      damaged block, a TILE_TABLE.MIP_LEVELS the tile cannot hold, a missing
-      tile, a missing label, an unmappable path and a short file each to
-      return a failure `Result` naming the offending value.
-- [ ] R-8.2 **Green.** The read entry points converted, the callers in
-      `tests/`, `examples/` and the README moved to them, and the `downstream`
-      job building Iris-Slide's paired branch against this checkout.
+- [x] R-8.1 **Red first.** `tests/ife_boundary_results_tests.cpp` (ctest `ife_boundary_results_tests`, both build systems) calls every converted function in its new form, holds each to its signature and `noexcept` with a `static_assert`, and requires a damaged TILE_TABLE (BAD_VALIDATION, the byte and the value stored), TILE_TABLE.MIP_LEVELS 8 on a 256-pixel UASTC tile (CONFORMANCE), tile 5 and layer 2 (NO_SUCH_TILE), a missing label (NO_SUCH_IMAGE), an unmappable path (NOT_MAPPED) and a four-byte file (NOT_CONSTRUCTED) to return a failure naming the value, with the output untouched. Evidence: the target does not compile against the tree at its commit, first error "no matching function for call to 'abstract_file_structure'"; every other target builds. [e2215b5](https://github.com/Aptix-Bio/Iris-File-Extension/commit/e2215b51701c2ed7dece90ed9cb8fe0d8105c320)
+- [x] R-8.2 **Green.** The read entry points converted (`src/IFE_Failure.hpp`: `Failure`, `boundary()`), five `FileError` members appended, the callers in `tests/`, `examples/` and the README moved, `Recovery::scan` joining its started workers when one cannot start, and the `downstream` job building Iris-Slide's paired branch through an overlay port of this checkout (`cmake/downstream_iris_slide.cmake`). Evidence: ctest 28 of 28 (Release, AppleClang) and 28 of 28 under `ctest --preset asan` (ASan+UBSan), `ife_boundary_results_tests` passing; `--validate`, `--check`, both lints, the review-configuration check and the move's checker pass; actionlint 1.7.12 reports only `release.yml`'s two SC2094 notes (three on main); Iris-Slide's branch `feature/BoundaryResults_R-8` builds against this checkout natively (library and encoder, arm64 macOS) and as the wasm32-emscripten module.
 
 ## R-9 — The Builder's public API returns a `Result` `todo`
 
@@ -513,7 +506,7 @@ The rule R-8 applies to the read path holds for the write handle too
 `std::bad_alloc`. Each becomes `noexcept`, returning a `Result` and writing
 what it produces (an offset, a handle, the placements) through an output
 reference, and Iris-Slide's encoder moves with it on a paired branch. Before
-R-4, so the bindings translate one error mechanism. [Write_05]
+R-4, so the bindings translate one error mechanism. [Api_06]
 
 - [ ] R-9.1 **Red first.** A test that each Builder entry point is `noexcept`
       and that a call out of order, a retired encoding and an exhausted arena

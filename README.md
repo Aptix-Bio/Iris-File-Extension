@@ -103,7 +103,7 @@ Every C++ example on this page is compiled against the real headers by the `ife_
 > [!WARNING]
 > When reading Iris slide files, you should **always validate** a slide before attempting to read data from it.
 
-`Parser::open` maps the file read-only and keeps it mapped for as long as any copy of the handle lives, so a reader that keeps the Parser keeps its bytes. Validation returns an `Iris::Result`; on failure its `message` says why.
+`Parser::open` maps the file read-only and keeps it mapped for as long as any copy of the handle lives, so a reader that keeps the Parser keeps its bytes. Every read call is `noexcept` and returns an `Iris::Result`: no exception crosses the API. A call that produces something writes it through its last argument, only on success; on failure the `Result` carries a `FileError` (`result.code_as<FileError>()`) and a `message` naming the offending value.
 <!-- ife-compile: fragment -->
 ```cpp
 #include "IrisFileExtension.hpp"
@@ -112,16 +112,22 @@ Every C++ example on this page is compiled against the real headers by the `ife_
 using namespace Iris;
 using namespace Iris::File;
 
-Parser parser = Parser::open(path);        // throws if the file cannot be mapped
+Parser parser;
+if (Result opened = Parser::open(path, parser); opened.failed()) {   // NOT_MAPPED, naming the path
+    std::printf("%s\n", opened.message.c_str());
+    return;
+}
 if (Result valid = parser.validate_file_structure(); valid.failed()) {
     std::printf("%s\n", valid.message.c_str());
     return;
 }
-const Abstraction::File& slide = parser.abstraction();    // lifted once, then kept
-std::span<const BYTE> stream   = parser.tile(layer, tile); // zero-copy; empty = no tile there
-// ...decompress stream.data(), stream.size() with the JPEG or AV1 decoder for the tile table's encoding
+const Abstraction::File* slide = nullptr;            // lifted once, then kept
+if (Result lifted = parser.abstraction(slide); lifted.failed()) return;
+std::span<const BYTE> stream;                        // zero-copy; empty = no tile there
+if (Result read = parser.tile(layer, tile, stream); read.failed()) return;   // NO_SUCH_TILE
+// ...decompress stream.data(), stream.size() with the JPEG or AV1 decoder for slide->tileTable.encoding
 ```
-`validate_file_structure` deep-validates the offset graph and bounds-checks every tile entry. `abstraction()` and `abstract_file_structure` check every block they read — both witnesses, and every length the block declares — and throw `std::runtime_error` on a structurally damaged file rather than reading it. They never return values they could not verify, and never repair; to reopen a damaged file, see [Recovering a Damaged File](#recovering-a-damaged-file). A caller that maps the file itself can bind a Parser to that mapping instead — `Parser({ptr, size})` borrows it — or call the free functions `validate_file_structure` / `abstract_file_structure` directly.
+`validate_file_structure` deep-validates the offset graph and bounds-checks every tile entry. `abstraction()` and `abstract_file_structure` check every block they read — both witnesses, and every length the block declares — and return a failure `Result` on a structurally damaged file rather than reading it, naming the block, its byte and the value it holds. They never hand out values they could not verify, and never repair; to reopen a damaged file, see [Recovering a Damaged File](#recovering-a-damaged-file). `abstraction()` writes a pointer to the Parser's one cached lift, so nothing is copied, and the pointer is valid while the Parser is. A caller that maps the file itself can bind a Parser to that mapping instead — `Parser({ptr, size})` borrows it — or call the free functions `validate_file_structure` / `abstract_file_structure(info, file)` directly.
 
 ### Writing a Slide
 The Builder controls how the stream is mutated — it claims space at the head and fills it — and your encoder decides everything else, the layout included: every `append_*` lands where the head is when you call it, so the order of your calls is the order on disk. Declare the tile pyramid, append every tile (from any number of threads, in any order), the associated images and, optionally, the clinical stream, then compose the structure — tile table, images array, attributes, METADATA — from the grid you declared and the Builder's report of what it placed (`tile_offsets`, `image_entries`), and `finalize` with the two roots. The Builder frames each tile stream by default (and always on a Z-stacked layer), refuses to report placements while any tile is unaccounted for, and leaves a complete, closed file. A block you want early but can only fill later (METADATA names the blocks after it) is `claim`ed early and `fill`ed once they exist.
@@ -236,7 +242,8 @@ for (uint32_t i = 0; offsets && i < offsets.count(); ++i) {
 
 using namespace Iris::File;
 
-const Abstraction::FileMap map = generate_file_map({ptr, size});
+Abstraction::FileMap map;
+if (Result mapped = generate_file_map({ptr, size}, map); mapped.failed()) return;
 const uint32_t version = versioned_root(ptr, size).__version;
 
 for (auto it = map.lower_bound(write_location); it != map.end(); ++it) {

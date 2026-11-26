@@ -79,6 +79,28 @@ bool throws(const std::function<void()>& fn) {
     return false;
 }
 
+/// The abstraction of `at`; a failure to lift is a test failure, reported with
+/// its message (the read path returns a Result, R-8).
+Abstraction::File lifted(const FileAccessInfo& at) {
+    Abstraction::File file;
+    if (const Result result = abstract_file_structure(at, file); result.failed()) {
+        std::fprintf(stderr, "FAIL: abstract_file_structure: %s\n", result.message.c_str());
+        ++g_failures;
+    }
+    return file;
+}
+
+/// The Parser's cached lift, checked as `lifted` is. Valid while `parser` is.
+const Abstraction::File& parsed(const Parser& parser) {
+    static const Abstraction::File none;
+    const Abstraction::File* file = &none;
+    if (const Result result = parser.abstraction(file); result.failed()) {
+        std::fprintf(stderr, "FAIL: Parser::abstraction: %s\n", result.message.c_str());
+        ++g_failures;
+    }
+    return *file;
+}
+
 /// Expect `fn` to throw exactly `E`, with a message naming `name`.
 template <class E>
 bool throws_naming(const std::function<void()>& fn, std::string_view name) {
@@ -274,7 +296,7 @@ int main() {
 
         const FileAccessInfo at{builder->base(), builder.head()};
         IFE_CHECK(validate_file_structure(at).succeeded());
-        const Abstraction::File file = abstract_file_structure(at);
+        const Abstraction::File file = lifted(at);
         IFE_CHECK(file.header.fileSize == builder.head());
         IFE_CHECK(file.header.revision == REVISION);
         IFE_CHECK(file.tileTable.encoding == TILE_ENCODING_JPEG);
@@ -336,7 +358,7 @@ int main() {
 
         const FileAccessInfo at{builder->base(), builder.head()};
         IFE_CHECK(validate_file_structure(at).succeeded());
-        const auto file = abstract_file_structure(at);
+        const auto file = lifted(at);
         const auto& null_entry = file.tileTable.layers[COORDS[3].layer][COORDS[3].tile];
         IFE_CHECK(null_entry.offset == k::NULL_TILE);
         IFE_CHECK(null_entry.size == 0);
@@ -356,7 +378,7 @@ int main() {
 
         const FileAccessInfo at{builder->base(), builder.head()};
         IFE_CHECK(validate_file_structure(at).succeeded());
-        const auto file = abstract_file_structure(at);
+        const auto file = lifted(at);
         check_tiles(at, file);
         IFE_CHECK(file.tileTable.planes.size() == 2);
         if (file.tileTable.planes.size() == 2) {
@@ -441,7 +463,7 @@ int main() {
                                      : placed.attributes < placed.metadata);
             const FileAccessInfo at{builder->base(), builder.head()};
             IFE_CHECK(validate_file_structure(at).succeeded());
-            files[metadata_first] = abstract_file_structure(at);
+            files[metadata_first] = lifted(at);
             check_tiles(at, files[metadata_first]);
         }
         IFE_CHECK(files[0].metadata.ICC_profile == files[1].metadata.ICC_profile);
@@ -458,7 +480,7 @@ int main() {
         write_structure(builder, two_layers(), some_metadata());
         const FileAccessInfo at{builder->base(), builder.head()};
         IFE_CHECK(validate_file_structure(at).succeeded());
-        const auto file = abstract_file_structure(at);
+        const auto file = lifted(at);
         check_tiles(at, file);
         for (uint32_t g = 0; g < 5; ++g) {
             const auto& entry = file.tileTable.layers[COORDS[g].layer][COORDS[g].tile];
@@ -491,7 +513,7 @@ int main() {
         if (mapped) {
             const FileAccessInfo at{mapped.base(), static_cast<Size>(fs::file_size(moved))};
             IFE_CHECK(validate_file_structure(at).succeeded());
-            check_tiles(at, abstract_file_structure(at));
+            check_tiles(at, lifted(at));
             mapped.close();
         }
         std::error_code ec;
@@ -564,10 +586,11 @@ int main() {
         const FileAccessInfo at{builder->base(), builder.head()};
         IFE_CHECK(validate_file_structure(at).succeeded());
         const Parser parser(at);
-        const Abstraction::File& file = parser.abstraction();
+        const Abstraction::File& file = parsed(parser);
         const auto image = file.images.find("label");
         IFE_CHECK(image != file.images.end() && image->second.info.encoding == IMAGE_ENCODING_PNG);
-        const auto stream = parser.image("label");
+        std::span<const BYTE> stream;
+        IFE_CHECK(parser.image("label", stream).succeeded());
         IFE_CHECK(stream.size() == img.size() &&
                   std::memcmp(stream.data(), img.data(), img.size()) == 0);
         const auto note = file.annotations.find(1);
@@ -632,7 +655,7 @@ int main() {
 
         const FileAccessInfo at{builder->base(), builder.head()};
         IFE_CHECK(validate_file_structure(at).succeeded());
-        const Abstraction::File file = Parser(at).abstraction();
+        const Abstraction::File file = parsed(Parser(at));
         IFE_CHECK(file.clinicalEncoding ==
                   static_cast<uint8_t>(k::ClinicalEncodings::CLINICAL_FHIR_JSON));
         IFE_CHECK(file.clinicalOffset == clinical_at + b::CLINICAL_METADATA::header_size);
@@ -675,12 +698,12 @@ int main() {
         const Builder three = write_slide(UASTC, 256, 3);
         IFE_CHECK(validate_file_structure(access(three)).succeeded());
         const Parser parser(access(three));
-        IFE_CHECK(parser.abstraction().tileTable.mipLevels == 3);
-        check_tiles(access(three), parser.abstraction());
+        IFE_CHECK(parsed(parser).tileTable.mipLevels == 3);
+        check_tiles(access(three), parsed(parser));
 
         // Zero and one both mean level 0 alone, as Z_PLANES does for planes.
         for (const uint16_t levels : {uint16_t{0}, uint16_t{1}})
-            IFE_CHECK(Parser(access(write_slide(UASTC, 256, levels))).abstraction()
+            IFE_CHECK(parsed(Parser(access(write_slide(UASTC, 256, levels))))
                           .tileTable.mipLevels == 1);
 
         // The coarsest level may be one 4x4 block and no smaller: a 256-pixel
@@ -691,8 +714,10 @@ int main() {
         IFE_CHECK(!too_many.succeeded());
         IFE_CHECK(too_many.code_as<FileError>() == FileError::CONFORMANCE);
         IFE_CHECK(too_many.message.find("MIP_LEVELS 8") != std::string::npos);
-        IFE_CHECK(throws_naming<std::runtime_error>([&] {
-            (void)Parser(access(eight)).abstraction(); }, "MIP_LEVELS 8"));
+        const Abstraction::File* refused = nullptr;
+        const Result eight_lifted = Parser(access(eight)).abstraction(refused);
+        IFE_CHECK(eight_lifted.code_as<FileError>() == FileError::CONFORMANCE);
+        IFE_CHECK(eight_lifted.message.find("MIP_LEVELS 8") != std::string::npos);
         // The same bound scales with the tile: a 128-pixel tile holds six.
         IFE_CHECK(validate_file_structure(access(write_slide(UASTC, 128, 6))).succeeded());
         IFE_CHECK(!validate_file_structure(access(write_slide(UASTC, 128, 7))).succeeded());
@@ -709,7 +734,7 @@ int main() {
         // one level whatever it holds.
         const Builder jpeg = write_slide(TILE_ENCODING_JPEG, 256, 3);
         IFE_CHECK(validate_file_structure(access(jpeg)).succeeded());
-        IFE_CHECK(Parser(access(jpeg)).abstraction().tileTable.mipLevels == 1);
+        IFE_CHECK(parsed(Parser(access(jpeg))).tileTable.mipLevels == 1);
     }
 
     if (g_failures == 0) std::printf("ife_builder_layered_tests: PASS\n");

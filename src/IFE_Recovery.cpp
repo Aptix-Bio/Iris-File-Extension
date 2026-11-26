@@ -21,6 +21,7 @@
  *     single, where FastFHIR's run by the thousand.
  */
 #include "IFE_Recovery.hpp"
+#include "IFE_Failure.hpp"
 #include "IFE_Primitives.hpp"
 
 #include <algorithm>
@@ -28,6 +29,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -605,12 +607,26 @@ bool ask(Board& B, const Recovery::Point& pt) {
 // =====================================================================
 // THE CENSUS AS A PRODUCER — census()
 // =====================================================================
+// The producers throw, as the rest of the module does; the public calls at
+// the foot of this file are their boundaries.
+namespace {
 
-Recovery::Census Recovery::census() const {
-    const Board B    = take_census(m_base, m_size, scan());
+using Census    = Recovery::Census;
+using Edge      = Recovery::Edge;
+using Island    = Recovery::Island;
+using Point     = Recovery::Point;
+using PointKind = Recovery::PointKind;
+using Slot      = Recovery::Slot;
+
+FileMap scan_bytes(const BYTE* base, Size size);
+std::vector<Gap> gaps_in(const BYTE* base, Size size, const FileMap& map);
+
+
+Census take_census_of(const BYTE* base, Size size) {
+    const Board B    = take_census(base, size, scan_bytes(base, size));
     const auto  kids = children(B);
     Census c;
-    c.extent  = m_size;
+    c.extent  = size;
     c.anchors = static_cast<std::size_t>(
         std::count_if(B.anchors.begin(), B.anchors.end(), [](const auto& a) { return !a.second.lost; }));
     for (const auto& [child, slot] : B.owner)
@@ -633,7 +649,7 @@ Recovery::Census Recovery::census() const {
         }
         c.islands.push_back(std::move(island));
     };
-    if (has_magic(m_base, m_size))
+    if (has_magic(base, size))
         grow(HEADER_PARENT, true);
     for (const auto& [off, a] : B.anchors)
         if (!a.lost && !B.owner.contains(off) && !placed.contains(off))
@@ -661,32 +677,42 @@ Recovery::Census Recovery::census() const {
 // tile offsets entry that names it, with its frame where one holds. The frame
 // SEARCH -- frames of streams whose entries are lost -- is the solver's
 // (development/WBS.md, RB-6): a bare 40-bit self-offset is too weak to scan for.
-FileMap Recovery::scan() const {
+FileMap scan_bytes(const BYTE* base, Size size) {
     FileMap map;
-    map.file_size = m_size;
-    const b::FILE_HEADER header = versioned_root(m_base, m_size);
-    if (has_magic(m_base, m_size))
+    map.file_size = size;
+    const b::FILE_HEADER header = versioned_root(base, size);
+    if (has_magic(base, size))
         map[0] = {Abstraction::MAP_ENTRY_FILE_HEADER, 0, header.extent()};
 
     const unsigned hw      = std::thread::hardware_concurrency();
-    const size_t   workers = (m_size >= (Size{1} << 20) && hw > 1) ? std::min<size_t>(hw, 8u) : 1;
-    const size_t   chunk   = (m_size + workers - 1) / workers;
+    const size_t   workers = (size >= (Size{1} << 20) && hw > 1) ? std::min<size_t>(hw, 8u) : 1;
+    const size_t   chunk   = (size + workers - 1) / workers;
     std::vector<std::vector<Offset>> found(workers);
     std::vector<std::exception_ptr>  errors(workers);
     const auto sweep = [&](size_t w) {
         try {
-            const size_t end = std::min<size_t>(m_size, (w + 1) * chunk +
+            const size_t end = std::min<size_t>(size, (w + 1) * chunk +
                                                     (w + 1 < workers ? p::BlockHeader::HEADER_SIZE - 1 : 0));
             for (size_t off = w * chunk; off + p::BlockHeader::HEADER_SIZE <= end; ++off)
-                if (load<std::uint64_t>(m_base + off) == off)
+                if (load<std::uint64_t>(base + off) == off)
                     found[w].push_back(static_cast<Offset>(off));
         } catch (const std::exception&) {
             errors[w] = std::current_exception();  // rethrown on the calling thread below
         }
     };
+    // A thread that cannot start throws std::system_error; the ones already
+    // running are joined first, since destroying a joinable std::thread
+    // terminates the process, and the failure reaches Recovery's boundary.
     std::vector<std::thread> threads;
-    for (size_t w = 1; w < workers; ++w)
-        threads.emplace_back(sweep, w);
+    threads.reserve(workers);
+    try {
+        for (size_t w = 1; w < workers; ++w)
+            threads.emplace_back(sweep, w);
+    } catch (const std::system_error&) {
+        for (std::thread& t : threads)
+            t.join();
+        throw;
+    }
     sweep(0);
     for (std::thread& t : threads)
         t.join();
@@ -700,14 +726,14 @@ FileMap Recovery::scan() const {
         for (const Offset off : offsets) {
             if (map.contains(off))
                 continue;  // the header, or a chunk overlap
-            const k::RecoveryCodes tag = tag_at(m_base, m_size, off);
+            const k::RecoveryCodes tag = tag_at(base, size, off);
             if (!sizable_tag(tag)) {
                 map.failures.push_back({Abstraction::ProducerFailureKind::ScanTagInvalid, off,
                                         Abstraction::MAP_ENTRY_UNDEFINED, tag,
                                         "the self-offset holds, but the tag is no type this build knows"});
                 continue;
             }
-            map[off] = classify_block(m_base, m_size, header.__version, off);
+            map[off] = classify_block(base, size, header.__version, off);
         }
 
     // The streams are charged through the census's own reading of each tile
@@ -717,8 +743,8 @@ FileMap Recovery::scan() const {
     // What the scan is certain of is the header, which the magic vouches for,
     // and each block's signature, which its self-offset does. A block's extent
     // is a claim its tag and lengths make, and the census weighs those.
-    Board B{.base = m_base, .size = m_size, .version = header.__version,
-            .newer_file = file_is_newer(m_base, m_size)};
+    Board B{.base = base, .size = size, .version = header.__version,
+            .newer_file = file_is_newer(base, size)};
     for (const auto& [off, e] : map) {
         B.cover.emplace(off, off == 0 ? e.size : Size{p::BlockHeader::HEADER_SIZE});
         if (off != 0)
@@ -740,10 +766,10 @@ FileMap Recovery::scan() const {
     };
     {
         for (const Slot& s : slots) {
-            if (s.stored == k::NULL_TILE || s.claim == 0 || !in_extent(s.stored, s.claim, m_size) ||
+            if (s.stored == k::NULL_TILE || s.claim == 0 || !in_extent(s.stored, s.claim, size) ||
                 !charge(static_cast<Offset>(s.stored), s.claim, Abstraction::MAP_ENTRY_TILE_PIXEL_DATA))
                 continue;
-            const b::TILE_PIXEL_DATA frame{m_base, static_cast<Offset>(s.stored), m_size, header.__version};
+            const b::TILE_PIXEL_DATA frame{base, static_cast<Offset>(s.stored), size, header.__version};
             if (frame.fits(b::TILE_PIXEL_DATA::header_size) &&
                 frame.validation() == s.stored + b::TILE_PIXEL_DATA::offset::VALIDATION &&
                 frame.tile_index() == s.index)
@@ -751,7 +777,7 @@ FileMap Recovery::scan() const {
                        b::TILE_PIXEL_DATA::header_size, Abstraction::MAP_ENTRY_TILE_FRAME);
         }
     }
-    find_gaps(map);
+    map.gaps = gaps_in(base, size, map);
     return map;
 }
 
@@ -763,10 +789,10 @@ FileMap Recovery::scan() const {
 // growing blocks are mostly single (FILE_HEADER, TILE_TABLE, METADATA), so a
 // single block's run qualifies alone, and a repeated type still must agree.
 // Otherwise the run is a hole.
-void Recovery::find_gaps(FileMap& map) const {
-    map.gaps.clear();
+std::vector<Gap> gaps_in(const BYTE* base, Size size, const FileMap& map) {
+    std::vector<Gap> gaps;
     if (map.empty())
-        return;
+        return gaps;
 
     // Each entry covers its extent, but never past the next entry: a block
     // never contains another block's first byte, and a stamped count or length
@@ -789,7 +815,7 @@ void Recovery::find_gaps(FileMap& map) const {
     if (map.file_size > cursor)
         runs.push_back({static_cast<Offset>(cursor), static_cast<Size>(map.file_size - cursor), after});
 
-    const bool newer = file_is_newer(m_base, m_size);
+    const bool newer = file_is_newer(base, size);
     std::map<std::pair<uint16_t, Size>, size_t> trails;  // (tag, run length) -> how many
     for (const Run& r : runs)
         ++trails[{static_cast<uint16_t>(r.after), r.length}];
@@ -806,9 +832,12 @@ void Recovery::find_gaps(FileMap& map) const {
         } else if (r.length < p::BlockHeader::HEADER_SIZE) {
             g.why = "unattributed, but too small to have held a block header";
         }
-        map.gaps.push_back(g);
+        gaps.push_back(g);
     }
+    return gaps;
 }
+
+}  // namespace
 
 // =====================================================================
 // LEAF HELPERS
@@ -818,5 +847,21 @@ void Recovery::find_gaps(FileMap& map) const {
 // one fact a damaged header can misstate, is RB-4's.
 Recovery::Recovery(const FileAccessInfo& info) noexcept
     : m_base(info.file_ptr), m_size(info.file_size) {}
+
+// =====================================================================
+// THE BOUNDARY — the public calls
+// =====================================================================
+
+Result Recovery::scan(FileMap& map) const noexcept {
+    return boundary("Recovery::scan", [&] { map = scan_bytes(m_base, m_size); });
+}
+
+Result Recovery::find_gaps(FileMap& map) const noexcept {
+    return boundary("Recovery::find_gaps", [&] { map.gaps = gaps_in(m_base, m_size, map); });
+}
+
+Result Recovery::census(Census& census) const noexcept {
+    return boundary("Recovery::census", [&] { census = take_census_of(m_base, m_size); });
+}
 
 }  // namespace Iris::File

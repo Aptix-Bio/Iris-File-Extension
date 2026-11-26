@@ -170,7 +170,8 @@ int main() {
     IFE_CHECK(Iris::File::validate_file_structure(info).succeeded());
 
     // ---- 3. The abstraction round-trips ----------------------------------- //
-    const Iris::File::Abstraction::File file = Iris::File::abstract_file_structure(info);
+    Iris::File::Abstraction::File file;
+    IFE_CHECK(Iris::File::abstract_file_structure(info, file).succeeded());
     IFE_CHECK(file.header.fileSize == builder.head());
     IFE_CHECK(file.tileTable.extent.width == 512);
     IFE_CHECK(file.tileTable.extent.height == 512);
@@ -196,7 +197,8 @@ int main() {
         IFE_CHECK(static_cast<bool>(parser));
         IFE_CHECK(parser.is_iris_slide_file().succeeded());
         IFE_CHECK(parser.validate_file_structure().succeeded());
-        const auto via_parser = parser.abstract_file_structure();
+        Iris::File::Abstraction::File via_parser;
+        IFE_CHECK(parser.abstract_file_structure(via_parser).succeeded());
         IFE_CHECK(via_parser.tileTable.extent.width == 512);
         IFE_CHECK(parser.data() == reinterpret_cast<const BYTE*>(builder->base()));
         IFE_CHECK(parser.size() == builder.head());
@@ -284,9 +286,8 @@ int main() {
             const Iris::File::Builder built = build_minimal_slide(t, c.tamper);
             const Iris::File::FileAccessInfo at{built->base(), built.head()};
             const bool validated = Iris::File::validate_file_structure(at).succeeded();
-            bool abstracted = true;
-            try { (void)Iris::File::abstract_file_structure(at); }
-            catch (const std::exception&) { abstracted = false; }
+            Iris::File::Abstraction::File file;
+            const bool abstracted = Iris::File::abstract_file_structure(at, file).succeeded();
             if (validated != c.valid || abstracted != c.valid)
                 std::fprintf(stderr, "  case: %s (validate %d, abstract %d, expected %d)\n",
                              c.name, validated, abstracted, c.valid);
@@ -387,9 +388,8 @@ int main() {
             const Iris::File::Builder built = build_framed_slide(c.planes, c.frames);
             const Iris::File::FileAccessInfo at{built->base(), built.head()};
             const bool validated = Iris::File::validate_file_structure(at).succeeded();
-            bool abstracted = true;
-            try { (void)Iris::File::abstract_file_structure(at); }
-            catch (const std::exception&) { abstracted = false; }
+            Iris::File::Abstraction::File file;
+            const bool abstracted = Iris::File::abstract_file_structure(at, file).succeeded();
             if (validated != c.valid || abstracted != c.valid)
                 std::fprintf(stderr, "  case: %s (validate %d, abstract %d, expected %d)\n",
                              c.name, validated, abstracted, c.valid);

@@ -200,32 +200,21 @@ jobs:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@v7
-      # Iris-Slide's CMake FetchContent-pulls IFE from origin/main; the
-      # FETCHCONTENT_SOURCE_DIR override redirects that fetch to THIS
-      # checkout — the exact state the PR would ship. Plain git, not
-      # actions/checkout: checkout rejects paths outside the workspace.
-      # The clone prefers this owner's Iris-Slide fork, so a fork's CI tests
-      # the fork's codec against this IFE state; owners without a codec fork
-      # (the CMakeLists.txt probe catches missing and empty ones) fall back
-      # to the upstream org.
-      # Build-only, matching Iris-Slide's own CI (which runs no ctest). The
-      # apt + jpeg-turbo recipe is copied from that CI verbatim. Iris-Slide's
-      # configure installs its dependencies through vcpkg since 2026-11-24
-      # (Iris-Slide cc17fb3), and nasm (for the aom port) and pkg-config are
-      # the system tools its .github/workflows/_build.yml installs because
-      # vcpkg cannot fetch them on Blacksmith's Linux runners.
-      - name: Check out Iris-Slide beside this repository
-        shell: bash
-        run: |
-          if git clone --depth 1 "https://github.com/${{ github.repository_owner }}/Iris-Slide.git" ../Iris-Slide && \
-             [ -f ../Iris-Slide/CMakeLists.txt ]; then
-            echo "using ${{ github.repository_owner }}/Iris-Slide"
-          else
-            echo "no usable ${{ github.repository_owner }}/Iris-Slide" \
-                 "(any clone error above is expected) - falling back to Aptix-Bio"
-            rm -rf ../Iris-Slide
-            git clone --depth 1 "https://github.com/Aptix-Bio/Iris-Slide.git" ../Iris-Slide
-          fi
+      # Iris-Slide takes IFE as a vcpkg port pinned by commit, so this job
+      # builds it through Iris-Slide's own scripts/local_ports.cmake, whose
+      # overlay port's source is THIS checkout: the exact state the PR would
+      # ship. Until R-8 (2026-11-25) it passed a FETCHCONTENT_SOURCE_DIR
+      # override, which Iris-Slide's configure reported unused, and built the
+      # pinned commit instead. Iris-Slide is cloned at the branch named like
+      # this pull request's head when it has one (a coordinated change, as
+      # Iris-Headers' downstream verdict pairs them), else main; the owner's
+      # fork is preferred, so a fork tests its own consumer. The script holds
+      # the logic (cmake/downstream_iris_slide.cmake); the branch name is text
+      # the author chose, so it reaches it through env:.
+      # Build-only, matching Iris-Slide's own CI (which runs no ctest). nasm
+      # (for the aom port) and pkg-config are the system tools Iris-Slide's
+      # .github/workflows/_build.yml installs because vcpkg cannot fetch them
+      # on Blacksmith's Linux runners.
       - name: Configure Jpeg-Turbo PPA
         run: |
           sudo wget -q https://packagecloud.io/dcommander/libjpeg-turbo/gpgkey -O /etc/apt/trusted.gpg.d/libjpeg-turbo
@@ -234,15 +223,12 @@ jobs:
           sudo apt update
       - name: Fetch Dependencies
         run: sudo apt install libhwy-dev libjpeg-turbo-official libavif-dev libpng-dev zlib1g-dev openslide-tools python3-dev meson ninja-build nasm pkg-config -y
-      - name: Configure CMake
-        run: >
-          cmake -B build -S ../Iris-Slide
-          -D CMAKE_BUILD_TYPE=Release
-          -D CMAKE_PREFIX_PATH="/opt/libjpeg-turbo/lib64/cmake/libjpeg-turbo/"
-          -D TURBOJPEG_INCLUDE="/opt/libjpeg-turbo/include/"
-          -D FETCHCONTENT_SOURCE_DIR_IRISFILEEXTENSION=$GITHUB_WORKSPACE
-      - name: Build
-        run: cmake --build build --config Release
+      - name: Iris-Slide (its paired branch, else main) built against this checkout
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          OWNER: ${{ github.repository_owner }}
+        working-directory: ..
+        run: cmake -DIFE="$GITHUB_WORKSPACE" -P "$GITHUB_WORKSPACE/cmake/downstream_iris_slide.cmake"
 
   sanitizers:
     name: address and undefined behaviour

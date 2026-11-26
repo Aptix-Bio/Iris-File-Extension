@@ -14,6 +14,7 @@
  */
 
 #include "IrisFileExtension.hpp"
+#include "IFE_Failure.hpp"
 #include "IFE_Primitives.hpp"
 
 #include <algorithm>
@@ -34,13 +35,6 @@ namespace k  = ::Iris::File::constants;
 namespace b  = ::Iris::File::blocks;
 
 namespace {
-
-/// Every failure this library reports: its own domain and code, the message,
-/// and the caller's location.
-Result failure(FileError __code, std::string __message,
-               std::source_location __where = std::source_location::current()) noexcept {
-    return Result::failure(Domain::IRIS_FILE_EXTENSION, __code, std::move(__message), __where);
-}
 
 /// The single place a generated Status becomes an Iris::Result.
 ///
@@ -108,8 +102,12 @@ Result to_result(const b::Status& __status) noexcept try {
     return failure(FileError::OUT_OF_MEMORY, "validation failed (out of memory formatting the diagnostic)");
 }
 
-[[noreturn]] void fail(const b::Status& __status) {
-    throw std::runtime_error(to_result(__status).message);
+/// Throw a generated check's failure from where the read path met it, with
+/// the FileError to_result gives it, so the boundary returns that code.
+[[noreturn]] void fail(const b::Status& status,
+                       std::source_location where = std::source_location::current()) {
+    const Result result = to_result(status);
+    throw Failure(result.code_as<FileError>(), result.message, where);
 }
 
 /// An OPTIONAL slot on the read path. NULL_OFFSET is absence and reads as
@@ -256,7 +254,8 @@ b::Status validate_nested_attributes(const b::ATTRIBUTES& __attrs, b::VisitPath&
 constexpr Size MAX_ATTRIBUTE_NODES = 1u << 20;
 
 /// Lift one attributes structure, and everything it nests, into the
-/// abstraction. Throws, as the rest of abstract_file_structure does.
+/// abstraction. Throws a Failure, as the rest of the lift does, with the
+/// FileError validate_nested_attributes reports for the same fault.
 ///
 /// Carries its own cycle check rather than relying on the caller having
 /// validated: abstract_file_structure is documented to require validation
@@ -265,15 +264,17 @@ constexpr Size MAX_ATTRIBUTE_NODES = 1u << 20;
 Abstraction::AttributeSet lift_attributes(const b::ATTRIBUTES& __attrs, b::VisitPath& __path,
                                           Size& __budget, Size __depth) {
     if (__depth > MAX_ATTRIBUTE_DEPTH)
-        throw std::runtime_error(
+        throw Failure(FileError::TOO_DEEP,
             "Attribute nesting exceeds the maximum depth of " +
             std::to_string(MAX_ATTRIBUTE_DEPTH));
     if (__path.contains(__attrs.__offset))
-        throw std::runtime_error(
+        throw Failure(FileError::CYCLE,
             "The attributes block at " + std::to_string(__attrs.__offset) +
             " is reached from itself; the nesting contains a cycle");
     if (!__path.push(__attrs.__offset))
-        throw std::runtime_error("Attribute nesting exceeds the block-graph depth");
+        throw Failure(FileError::TOO_DEEP, "Attribute nesting at the attributes block at " +
+                      std::to_string(__attrs.__offset) + " exceeds the block-graph depth of " +
+                      std::to_string(b::MAX_BLOCK_DEPTH));
     // Every failure below leaves by exception, so the pop has to survive
     // unwinding rather than sit at the end of the body.
     struct PathScope {
@@ -286,16 +287,16 @@ Abstraction::AttributeSet lift_attributes(const b::ATTRIBUTES& __attrs, b::Visit
     switch (slice_attributes(__attrs, slices, &at)) {
         case SliceError::NONE: break;
         case SliceError::UNREADABLE:
-            throw std::runtime_error(
+            throw Failure(FileError::NOT_CONSTRUCTED,
                 "The attributes block at " + std::to_string(__attrs.__offset) +
                 " does not have a readable sizes or byte array");
         case SliceError::OVERRUN:
-            throw std::runtime_error(
+            throw Failure(FileError::ARRAY_OVERRUN,
                 "Attribute " + std::to_string(at) + " of the attributes block at " +
                 std::to_string(__attrs.__offset) +
                 " extends past the attribute byte array");
         case SliceError::NESTED_PARTIAL:
-            throw std::runtime_error(
+            throw Failure(FileError::BAD_NESTED_VALUE,
                 "Attribute " + std::to_string(at) + " of the attributes block at " +
                 std::to_string(__attrs.__offset) + " is a nested value of " +
                 std::to_string(__attrs.sizes_offset().entry(at).value_size()) +
@@ -306,7 +307,7 @@ Abstraction::AttributeSet lift_attributes(const b::ATTRIBUTES& __attrs, b::Visit
     // Charged per node rather than per block, because the cost this bounds is
     // the materialised tree, not the file.
     if (slices.size() > __budget)
-        throw std::runtime_error(
+        throw Failure(FileError::TOO_LARGE,
             "The attribute structure expands to more than " +
             std::to_string(MAX_ATTRIBUTE_NODES) +
             " nodes; a structure shared by many parents is materialised once per parent");
@@ -552,7 +553,11 @@ Result IFE_EXPORT validate_file_structure(const FileAccessInfo& __info) noexcept
     return to_result(b::Status{});
 }
 
-Abstraction::File IFE_EXPORT abstract_file_structure(const FileAccessInfo& __info) {
+namespace {
+
+/// The lift behind abstract_file_structure: every block it follows must pass
+/// validate(), and the first that does not is thrown as a Failure naming it.
+Abstraction::File lift_file_structure(const FileAccessInfo& __info) {
     using namespace Abstraction;
     File abstraction;
 
@@ -578,7 +583,7 @@ Abstraction::File IFE_EXPORT abstract_file_structure(const FileAccessInfo& __inf
     // say "256".
     abstraction.tileTable.tileLength = tile_length(table);
     if (const std::string mips = mip_levels_error(table, abstraction.tileTable.tileLength); !mips.empty())
-        throw std::runtime_error(mips);
+        throw Failure(FileError::CONFORMANCE, mips);
     abstraction.tileTable.mipLevels = mip_levels(table);
 
     const auto extents = table.layer_extents_offset();
@@ -617,7 +622,7 @@ Abstraction::File IFE_EXPORT abstract_file_structure(const FileAccessInfo& __inf
         [&](std::uint32_t __layer, std::uint64_t, Offset __offset, std::uint32_t __size) {
             layers[__layer].push_back({.offset = __offset, .size = __size});
         });
-    if (!tiles.empty()) throw std::runtime_error(tiles);
+    if (!tiles.empty()) throw Failure(FileError::BAD_TILE_ENTRY, tiles);
 
     // ---- metadata, and the optional blocks it points at ------------------ //
     const auto metadata = header.metadata_offset();
@@ -738,11 +743,17 @@ Abstraction::File IFE_EXPORT abstract_file_structure(const FileAccessInfo& __inf
                         .offset = blob.__offset + b::ANNOTATION_GROUP_BYTES::header_size + __at,
                         .number = __members};
                 });
-            if (!groups.empty()) throw std::runtime_error(groups);
+            if (!groups.empty()) throw Failure(FileError::BAD_ANNOTATION_GROUP, groups);
         }
     }
 
     return abstraction;
+}
+
+}  // namespace
+
+Result IFE_EXPORT abstract_file_structure(const FileAccessInfo& info, Abstraction::File& file) noexcept {
+    return boundary("abstract_file_structure", [&] { file = lift_file_structure(info); });
 }
 
 // MARK: - File mapping
@@ -771,9 +782,9 @@ void queue_children(Abstraction::FileMap& __map, const std::vector<Recovery::Slo
             __todo.push_back({it->stored, it->expect, it->parent == 0});
 }
 
-}  // namespace
-
-Abstraction::FileMap IFE_EXPORT generate_file_map(const FileAccessInfo& __info) {
+/// The walk behind generate_file_map; a required block that cannot be read
+/// is thrown as a Failure naming it.
+Abstraction::FileMap map_file_structure(const FileAccessInfo& __info) {
     using namespace Abstraction;
     FileMap map;
     map.file_size = __info.file_size;
@@ -818,6 +829,12 @@ Abstraction::FileMap IFE_EXPORT generate_file_map(const FileAccessInfo& __info) 
         queue_children(map, slots, todo);
     }
     return map;
+}
+
+}  // namespace
+
+Result IFE_EXPORT generate_file_map(const FileAccessInfo& info, Abstraction::FileMap& map) noexcept {
+    return boundary("generate_file_map", [&] { map = map_file_structure(info); });
 }
 
 }  // namespace Iris::File

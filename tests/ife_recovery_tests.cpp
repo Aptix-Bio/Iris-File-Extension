@@ -50,7 +50,16 @@ namespace p = ::Iris::File::primitives;
 std::string g_corpus_dir;
 
 Recovery::Census census_of(const std::vector<BYTE>& f) {
-    return Recovery({f.data(), f.size()}).census();
+    Recovery::Census census;
+    IFE_CHECK(Recovery({f.data(), f.size()}).census(census).succeeded());
+    return census;
+}
+
+/// The scan's gaps; a failed scan is counted and reads as none.
+std::vector<Abstraction::Gap> gaps_of(const std::vector<BYTE>& f) {
+    Abstraction::FileMap map;
+    IFE_CHECK(Recovery({f.data(), f.size()}).scan(map).succeeded());
+    return map.gaps;
 }
 
 const Recovery::Edge* edge_at(const Recovery::Census& c, Offset seat) {
@@ -80,7 +89,8 @@ void check_clean_census(const std::vector<BYTE>& f, const std::string& fixture) 
     // The clean baseline: generate_file_map walks the same slots, so every
     // block and stream it records is the child of a decided link, and no link
     // names anything it does not record.
-    const auto map = generate_file_map({f.data(), f.size()});
+    Abstraction::FileMap map;
+    IFE_CHECK(generate_file_map({f.data(), f.size()}, map).succeeded());
     std::set<Offset> children;
     for (const Recovery::Edge& e : c.edges) children.insert(e.child);
     std::size_t unlinked = 0;
@@ -131,11 +141,10 @@ std::vector<BYTE> newer_slide(std::uint16_t major, std::uint16_t minor) {
 void test_newer_writer_skew_is_not_a_hole() {
     using Abstraction::GapClass;
     const std::vector<BYTE> newer = newer_slide(200, 0);
-    const Recovery rec({newer.data(), newer.size()});
-    const auto gaps = rec.scan().gaps;
+    const auto gaps = gaps_of(newer);
     IFE_CHECK(gaps.size() == 2);
     for (const auto& g : gaps) IFE_CHECK(g.class_ == GapClass::VersionSkew);
-    const Recovery::Census c = rec.census();
+    const Recovery::Census c = census_of(newer);
     IFE_CHECK(c.holes.empty());
     IFE_CHECK(c.points.empty());
     IFE_CHECK(c.islands.size() == 1);
@@ -143,7 +152,7 @@ void test_newer_writer_skew_is_not_a_hole() {
     // The control: the same layout claiming this build's version. Nothing
     // explains the runs, so they are holes -- the version is what decides.
     const std::vector<BYTE> same = newer_slide(IFE_SCHEMA_VERSION_MAJOR, IFE_SCHEMA_VERSION_MINOR);
-    const auto same_gaps = Recovery({same.data(), same.size()}).scan().gaps;
+    const auto same_gaps = gaps_of(same);
     IFE_CHECK(same_gaps.size() == 2);
     for (const auto& g : same_gaps) IFE_CHECK(g.class_ == GapClass::Hole);
 }

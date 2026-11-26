@@ -79,7 +79,13 @@ flowchart LR
     cross-compiles with `g++-s390x-linux-gnu` and runs every test under
     `qemu-s390x` (`cmake --workflow --preset big-endian`), without Docker (D4).
 12. **The consumer builds against every change.** The `downstream` job clones
-    Iris-Slide and builds it against this checkout (D5).
+    Iris-Slide and builds it against this checkout through an overlay port
+    written by Iris-Slide's `scripts/local_ports.cmake`
+    (`cmake/downstream_iris_slide.cmake`, D5). A change that breaks Iris-Slide
+    is made in both repositories on a branch of the same name, and the job
+    clones Iris-Slide at that branch when it exists, else `main`; the two pull
+    requests name each other and their merge order, this one first, since
+    Iris-Slide's port then pins its commit (R-8).
 13. **Portability lint before pushing.** `python3 tools/portability_lint.py`
     catches in a second the failures that otherwise first appear on MSVC or
     under Bazel's sandbox.
