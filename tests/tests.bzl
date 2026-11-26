@@ -330,6 +330,7 @@ def ife_tests(
         srcs = [
             "tests/ife_boundary_results_tests.cpp",
             "tests/ife_builder_fixture.hpp",
+            "src/IFE_Failure.hpp",
         ],
         copts = copts,
         size = "small",

@@ -7,7 +7,7 @@
  *
  * What this pins, on the frozen 1.1 witness (one 2x2 layer declaring 3 focal
  * planes; tiles 0-2 framed with plane counts 3, 0, 0; tile 3 NULL_TILE):
- *   - `Parser::open` maps the file itself and keeps it mapped for as long as
+ *   - `create_parser` maps the file itself and keeps it mapped for as long as
  *     any copy of the handle lives.
  *   - `abstraction()` equals `abstract_file_structure` over the same bytes.
  *   - `tile()` spans point into the mapping at the entry's offset; NULL_TILE is
@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
 
     // ---- open: the parser owns its mapping --------------------------------- //
     Parser parser;
-    IFE_CHECK(Parser::open(witness, parser).succeeded());
+    IFE_CHECK(create_parser({.filepath = witness}, parser).succeeded());
     IFE_CHECK(static_cast<bool>(parser));
     IFE_CHECK(parser->owns_mapping());
     IFE_CHECK(parser.validate_file_structure().succeeded());
@@ -170,7 +170,7 @@ int main(int argc, char** argv) {
 
     // ---- a path that cannot be mapped is NOT_MAPPED ------------------------ //
     Parser unopened;
-    IFE_CHECK(fails(Parser::open(ife_corpus_dir(argv[1]) + "/no_such_slide.iris", unopened),
+    IFE_CHECK(fails(create_parser({.filepath = ife_corpus_dir(argv[1]) + "/no_such_slide.iris"}, unopened),
                     FileError::NOT_MAPPED));
     IFE_CHECK(!unopened);
 

@@ -18,6 +18,10 @@
  *      caller had it.
  *   4. A Parser whose lift failed fails again on the next call, instead of
  *      handing back a half-lifted structure.
+ *   5. boundary() returns each kind of exception as its code: a Failure keeps
+ *      its own, std::bad_alloc is OUT_OF_MEMORY, a std::system_error (a thread
+ *      the operating system would not start) is SYSTEM_ERROR naming the
+ *      system's message, and anything else is UNEXPECTED_EXCEPTION.
  *
  * Self-contained (no framework, no corpus): the slides are Builder-written.
  * Non-zero exit on failure.
@@ -29,10 +33,14 @@
 #include "IrisFileExtension.hpp"
 
 #include "ife_builder_fixture.hpp"
+#include "../src/IFE_Failure.hpp"   // boundary(), the one place a failure leaves the module
 
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <new>
+#include <stdexcept>
+#include <system_error>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -49,66 +57,53 @@ using Span = std::span<const BYTE>;
 
 // ---- 1. every converted function: its signature and noexcept ------------- //
 
-// Declared and never defined: they appear only in unevaluated operands, and
-// have external linkage so the compiler does not report them unused.
-namespace probe {
-
-template <class T> T& out() noexcept;   // an lvalue of T
-
-const Parser&                parser() noexcept;
-const Parser_t&              body() noexcept;
-const Recovery&              recovery() noexcept;
-const FileAccessInfo&        access_info() noexcept;
-const std::filesystem::path& a_path() noexcept;
-
 // The free functions.
-static_assert(std::is_same_v<decltype(abstract_file_structure(access_info(), out<Abstraction::File>())), Result>);
-static_assert(noexcept(abstract_file_structure(access_info(), out<Abstraction::File>())));
-static_assert(std::is_same_v<decltype(generate_file_map(access_info(), out<Abstraction::FileMap>())), Result>);
-static_assert(noexcept(generate_file_map(access_info(), out<Abstraction::FileMap>())));
+static_assert(std::is_same_v<decltype(abstract_file_structure(std::declval<const FileAccessInfo&>(), std::declval<Abstraction::File&>())), Result>);
+static_assert(noexcept(abstract_file_structure(std::declval<const FileAccessInfo&>(), std::declval<Abstraction::File&>())));
+static_assert(std::is_same_v<decltype(generate_file_map(std::declval<const FileAccessInfo&>(), std::declval<Abstraction::FileMap&>())), Result>);
+static_assert(noexcept(generate_file_map(std::declval<const FileAccessInfo&>(), std::declval<Abstraction::FileMap&>())));
 // The two that already complied, held to it.
-static_assert(noexcept(is_iris_slide_file(access_info())));
-static_assert(noexcept(validate_file_structure(access_info())));
+static_assert(noexcept(is_iris_slide_file(std::declval<const FileAccessInfo&>())));
+static_assert(noexcept(validate_file_structure(std::declval<const FileAccessInfo&>())));
 
-// Parser::open writes the handle it makes.
-static_assert(std::is_same_v<decltype(Parser::open(a_path(), out<Parser>())), Result>);
-static_assert(noexcept(Parser::open(a_path(), out<Parser>())));
+// create_parser writes the handle it makes.
+static_assert(std::is_same_v<decltype(create_parser(std::declval<const ParserDesc&>(), std::declval<Parser&>())), Result>);
+static_assert(noexcept(create_parser(std::declval<const ParserDesc&>(), std::declval<Parser&>())));
 
 // The Parser handle.
-static_assert(std::is_same_v<decltype(parser().abstract_file_structure(out<Abstraction::File>())), Result>);
-static_assert(noexcept(parser().abstract_file_structure(out<Abstraction::File>())));
-static_assert(std::is_same_v<decltype(parser().abstraction(out<const Abstraction::File*>())), Result>);
-static_assert(noexcept(parser().abstraction(out<const Abstraction::File*>())));
-static_assert(std::is_same_v<decltype(parser().tile(0u, 0u, out<Span>())), Result>);
-static_assert(noexcept(parser().tile(0u, 0u, out<Span>())));
-static_assert(std::is_same_v<decltype(parser().tile_planes(0u, 0u, out<std::uint16_t>())), Result>);
-static_assert(noexcept(parser().tile_planes(0u, 0u, out<std::uint16_t>())));
-static_assert(std::is_same_v<decltype(parser().image(std::string{}, out<Span>())), Result>);
-static_assert(noexcept(parser().image(std::string{}, out<Span>())));
+static_assert(std::is_same_v<decltype(std::declval<const Parser&>().abstract_file_structure(std::declval<Abstraction::File&>())), Result>);
+static_assert(noexcept(std::declval<const Parser&>().abstract_file_structure(std::declval<Abstraction::File&>())));
+static_assert(std::is_same_v<decltype(std::declval<const Parser&>().abstraction(std::declval<const Abstraction::File*&>())), Result>);
+static_assert(noexcept(std::declval<const Parser&>().abstraction(std::declval<const Abstraction::File*&>())));
+static_assert(std::is_same_v<decltype(std::declval<const Parser&>().tile(0u, 0u, std::declval<Span&>())), Result>);
+static_assert(noexcept(std::declval<const Parser&>().tile(0u, 0u, std::declval<Span&>())));
+static_assert(std::is_same_v<decltype(std::declval<const Parser&>().tile_planes(0u, 0u, std::declval<std::uint16_t&>())), Result>);
+static_assert(noexcept(std::declval<const Parser&>().tile_planes(0u, 0u, std::declval<std::uint16_t&>())));
+static_assert(std::is_same_v<decltype(std::declval<const Parser&>().image(std::string{}, std::declval<Span&>())), Result>);
+static_assert(noexcept(std::declval<const Parser&>().image(std::string{}, std::declval<Span&>())));
 
 // The body behind it, which also carries the file map.
-static_assert(std::is_same_v<decltype(body().abstract_file_structure(out<Abstraction::File>())), Result>);
-static_assert(noexcept(body().abstract_file_structure(out<Abstraction::File>())));
-static_assert(std::is_same_v<decltype(body().abstraction(out<const Abstraction::File*>())), Result>);
-static_assert(noexcept(body().abstraction(out<const Abstraction::File*>())));
-static_assert(std::is_same_v<decltype(body().tile(0u, 0u, out<Span>())), Result>);
-static_assert(noexcept(body().tile(0u, 0u, out<Span>())));
-static_assert(std::is_same_v<decltype(body().tile_planes(0u, 0u, out<std::uint16_t>())), Result>);
-static_assert(noexcept(body().tile_planes(0u, 0u, out<std::uint16_t>())));
-static_assert(std::is_same_v<decltype(body().image(std::string{}, out<Span>())), Result>);
-static_assert(noexcept(body().image(std::string{}, out<Span>())));
-static_assert(std::is_same_v<decltype(body().generate_file_map(out<Abstraction::FileMap>())), Result>);
-static_assert(noexcept(body().generate_file_map(out<Abstraction::FileMap>())));
+static_assert(std::is_same_v<decltype(std::declval<const Parser_t&>().abstract_file_structure(std::declval<Abstraction::File&>())), Result>);
+static_assert(noexcept(std::declval<const Parser_t&>().abstract_file_structure(std::declval<Abstraction::File&>())));
+static_assert(std::is_same_v<decltype(std::declval<const Parser_t&>().abstraction(std::declval<const Abstraction::File*&>())), Result>);
+static_assert(noexcept(std::declval<const Parser_t&>().abstraction(std::declval<const Abstraction::File*&>())));
+static_assert(std::is_same_v<decltype(std::declval<const Parser_t&>().tile(0u, 0u, std::declval<Span&>())), Result>);
+static_assert(noexcept(std::declval<const Parser_t&>().tile(0u, 0u, std::declval<Span&>())));
+static_assert(std::is_same_v<decltype(std::declval<const Parser_t&>().tile_planes(0u, 0u, std::declval<std::uint16_t&>())), Result>);
+static_assert(noexcept(std::declval<const Parser_t&>().tile_planes(0u, 0u, std::declval<std::uint16_t&>())));
+static_assert(std::is_same_v<decltype(std::declval<const Parser_t&>().image(std::string{}, std::declval<Span&>())), Result>);
+static_assert(noexcept(std::declval<const Parser_t&>().image(std::string{}, std::declval<Span&>())));
+static_assert(std::is_same_v<decltype(std::declval<const Parser_t&>().generate_file_map(std::declval<Abstraction::FileMap&>())), Result>);
+static_assert(noexcept(std::declval<const Parser_t&>().generate_file_map(std::declval<Abstraction::FileMap&>())));
 
 // The recovery census.
-static_assert(std::is_same_v<decltype(recovery().scan(out<Abstraction::FileMap>())), Result>);
-static_assert(noexcept(recovery().scan(out<Abstraction::FileMap>())));
-static_assert(std::is_same_v<decltype(recovery().find_gaps(out<Abstraction::FileMap>())), Result>);
-static_assert(noexcept(recovery().find_gaps(out<Abstraction::FileMap>())));
-static_assert(std::is_same_v<decltype(recovery().census(out<Recovery::Census>())), Result>);
-static_assert(noexcept(recovery().census(out<Recovery::Census>())));
+static_assert(std::is_same_v<decltype(std::declval<const Recovery&>().scan(std::declval<Abstraction::FileMap&>())), Result>);
+static_assert(noexcept(std::declval<const Recovery&>().scan(std::declval<Abstraction::FileMap&>())));
+static_assert(std::is_same_v<decltype(std::declval<const Recovery&>().find_gaps(std::declval<Abstraction::FileMap&>())), Result>);
+static_assert(noexcept(std::declval<const Recovery&>().find_gaps(std::declval<Abstraction::FileMap&>())));
+static_assert(std::is_same_v<decltype(std::declval<const Recovery&>().census(std::declval<Recovery::Census&>())), Result>);
+static_assert(noexcept(std::declval<const Recovery&>().census(std::declval<Recovery::Census&>())));
 
-}  // namespace probe
 
 namespace {
 
@@ -285,7 +280,7 @@ int main() {
             std::filesystem::temp_directory_path() / "ife_boundary_results_no_such_slide.iris";
         std::filesystem::remove(missing);
         Parser opened;
-        IFE_CHECK(fails_with(Parser::open(missing, opened), FileError::NOT_MAPPED, missing.string()));
+        IFE_CHECK(fails_with(create_parser({.filepath = missing}, opened), FileError::NOT_MAPPED, missing.string()));
         IFE_CHECK(!opened);   // untouched
     }
 
@@ -299,6 +294,20 @@ int main() {
         Abstraction::File file;
         IFE_CHECK(fails_with(abstract_file_structure(at, file), FileError::NOT_CONSTRUCTED,
                              "FILE_HEADER at byte 0"));
+    }
+
+    // ---- boundary(): each kind of exception becomes its code ---------------- //
+    {
+        IFE_CHECK(boundary("test", [] {}).succeeded());
+        IFE_CHECK(fails_with(boundary("test", [] { throw Failure(FileError::NO_SUCH_TILE, "tile 9"); }),
+                             FileError::NO_SUCH_TILE, "tile 9"));
+        IFE_CHECK(fails_with(boundary("test", [] { throw std::bad_alloc(); }), FileError::OUT_OF_MEMORY,
+                             "test ran out of memory"));
+        const std::error_code refused = std::make_error_code(std::errc::resource_unavailable_try_again);
+        IFE_CHECK(fails_with(boundary("test", [&] { throw std::system_error(refused, "thread"); }),
+                             FileError::SYSTEM_ERROR, refused.message()));
+        IFE_CHECK(fails_with(boundary("test", [] { throw std::logic_error("stray"); }),
+                             FileError::UNEXPECTED_EXCEPTION, "stray"));
     }
 
     if (g_failures == 0) std::printf("ife_boundary_results_tests: PASS\n");
