@@ -244,6 +244,9 @@ exact-size rule is normative, and a reader that decodes refuses a frame of any
 other size. Branch `feature/Av1ColorAndSize_TE-3`. [Wire_13]
 
 - [x] TE-3.1 **Red first.** `tests/ife_av1_tile_stream_tests.cpp` (ctest `ife_av1_tile_stream_tests`, both build systems) builds sequence headers with a bit writer that follows the AV1 syntax tables, on every branch of the syntax, and checks three headers libaom's aomenc 3.13.2 wrote; it requires each rule broken alone, each OBU framing requirement and each length bound to fail as CONFORMANCE naming the syntax element and its value, every prefix of a stream and every short payload to fail without reading past its allocation, 20,000 seeded garbage and damaged inputs to return, other encodings to go unparsed, and `validate_file_structure` to name the layer, tile, field and value. Evidence: the target does not compile against the tree at its commit, "no member named 'check_tile_stream' in namespace 'Iris::File::blocks'" (`ife_av1_tile_stream_tests.cpp:291`); every other target builds.
+- [x] TE-3.2 **Green.** `include/IFE_Av1.hpp` (namespace `detail`, 344 lines with its documentation) walks the OBUs to the first sequence header with every length bounded (leb128 at most 8 bytes and 2^32 - 1, `obu_size` against the bytes left, `obu_forbidden_bit` 0, `obu_has_size_field` 1, no extension byte on the sequence header) and reads `sequence_header_obu()` and `color_config()` through a sticky-finding bit reader on every branch, the reduced still-picture form included; `validate_file_structure` runs it on every non-null tile under `TILE_ENCODING_AV1` and fails as CONFORMANCE naming the layer, tile, offset, size, syntax element and value; the generator emits `check_tile_stream` into the validation layer, one case per tile encoding; the specification's AV1 Tile Byte-Streams clause, the AV1 member's description, the 1.1 revision summary, D31 and CLAUDE.md state the rules. Evidence: ctest 29 of 29 (Release, AppleClang 21, arm64 macOS) and 29 of 29 under `ctest --preset asan` (ASan+UBSan), `ife_av1_tile_stream_tests` passing, 4,647 of its 20,000 seeded inputs accepted (flips past the sequence header); with the bit reader's bound removed ASan reports a heap-buffer-overflow in `SyntaxReader::f`, and with the film-grain requirement removed the rule table fails; `--validate`, `--check`, determinism under `PYTHONHASHSEED` 0 and 1, the portability lint, the runner-label lint, the review-configuration check and `spec/build_document.sh` pass. Bazel was not run locally: on this host every target, those on main included, fails Bazel's absolute-include check on the Xcode SDK's `SDKSettings.json`; CI's Linux and Windows Bazel cells run it.
+- [ ] TE-3.3 **VERIFY:** the maintainer reviews the AV1 clauses of the specification and D31.
+- [ ] TE-3.4 **A reader that decodes refuses a frame of another size.** Iris-Slide's half, in its own pull request: the AV1 decode path checks each decoded frame against TILE_LENGTH, since IFE parses no frame header. `todo`.
 
 ## VL-1 — The validation layer's diagnostic sink under a multithreaded writer `todo` (P1, latent)
 
@@ -598,6 +601,20 @@ Collected from the retired documents' "not blocking" and "deferred" notes.
   form) and register it in both build systems, or delete it with the reason.
   Found 2026-11-25 (R-8).
 ---
+
+## Session log
+
+Dated entries, newest last: the items worked, the outcome, and where the next
+session starts.
+
+- **2026-11-26** — TE-3.1 and TE-3.2 on `feature/Av1ColorAndSize_TE-3`, cut
+  from `feature/BoundaryResults_R-8` (pull request #11, open): the AV1 colour
+  and frame-size rules (D31) in the specification, `validate_file_structure`
+  and the validation layer. Red, then green on Release and ASan+UBSan; the
+  branch is pushed and its pull request waits for #11 to merge. **Next:**
+  once #11 merges, rebase onto `main`, open the pull request against `main`,
+  and read CI's Bazel cells for `ife_av1_tile_stream_tests`; TE-3.3 is the
+  maintainer's; TE-3.4 opens in Iris-Slide.
 
 ## Closed work
 

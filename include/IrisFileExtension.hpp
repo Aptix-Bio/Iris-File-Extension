@@ -171,6 +171,10 @@ Result               IFE_EXPORT is_iris_slide_file      (const FileAccessInfo&) 
  * specification validations.
  *
  * This performs a tree validation of objects and sub-objects to ensure their offsets properly.
+ * It also enforces the two value rules the read path depends on: TILE_TABLE.MIP_LEVELS (D29),
+ * and, under TILE_ENCODING_AV1, each tile stream's first sequence header (D31: BT.601 full-range
+ * 8-bit colour, frames of TILE_LENGTH square, no superres, no film grain). A stream that breaks
+ * one is CONFORMANCE, naming the layer, the tile, the AV1 syntax element and its value.
  */
 Result               IFE_EXPORT validate_file_structure (const FileAccessInfo&) noexcept;
 

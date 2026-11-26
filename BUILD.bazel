@@ -95,6 +95,10 @@ filegroup(
         "include/IFE_Builder.hpp",
         "include/IFE_Parser.hpp",
         "include/IFE_Window.hpp",
+        # The AV1 sequence-header check (TE-3, namespace detail): included by
+        # IFE_Runtime.cpp and the generated IFE_Validation.cpp, which both
+        # see this filegroup. CMake does not install it.
+        "include/IFE_Av1.hpp",
     ],
 )
 

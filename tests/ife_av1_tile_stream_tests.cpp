@@ -569,8 +569,8 @@ void test_validate_file_structure() {
     IFE_CHECK(abstract_file_structure(at, file).succeeded());
 
     // The frame size is the slide's TILE_LENGTH, whatever it is.
-    SequenceHeader small;   // 256 square, on a 512-pixel slide
-    const std::vector<BYTE> mismatch = av1_slide(small, 512);
+    const SequenceHeader default_edge;   // 256 square, on a 512-pixel slide
+    const std::vector<BYTE> mismatch = av1_slide(default_edge, 512);
     IFE_CHECK(fails_with(validate_file_structure({mismatch.data(), mismatch.size()}),
                          FileError::CONFORMANCE, "max_frame_width_minus_1 255"));
     SequenceHeader large;

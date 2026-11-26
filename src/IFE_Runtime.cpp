@@ -14,6 +14,7 @@
  */
 
 #include "IrisFileExtension.hpp"
+#include "IFE_Av1.hpp"
 #include "IFE_Failure.hpp"
 #include "IFE_Primitives.hpp"
 
@@ -495,6 +496,30 @@ std::string mip_levels_error(const b::TILE_TABLE& table, std::uint16_t length) {
     return {};
 }
 
+/// Why a TILE_ENCODING_AV1 tile stream fails D31's colour and frame-size
+/// rules, in the words of the AV1 syntax element and its value, or an empty
+/// string (spec, AV1 Tile Byte-Streams).
+std::string av1_stream_error(const detail::Av1Finding& finding) {
+    const std::string field = finding.field;
+    const std::string found = std::to_string(finding.found);
+    switch (finding.fault) {
+        case detail::Av1Fault::NONE:
+            return {};
+        case detail::Av1Fault::MUST_EQUAL:
+            return "has " + field + " " + found + ", where TILE_ENCODING_AV1 requires " +
+                   std::to_string(finding.expected);
+        case detail::Av1Fault::ABOVE_LIMIT:
+            return "has " + field + " " + found + ", where TILE_ENCODING_AV1 allows at most " +
+                   std::to_string(finding.expected);
+        case detail::Av1Fault::PAST_END:
+            return "has " + field + " " + found + ", past the " + std::to_string(finding.expected) +
+                   " bytes left in the stream";
+        case detail::Av1Fault::ENDS_INSIDE:
+            return "ends inside " + field + ", " + found + " bytes in";
+    }
+    return "fails an AV1 check this runtime does not name";
+}
+
 /// validate_file_structure's view of the annotation groups. validate_deep has
 /// already vouched for every block it reaches, so a slot that does not validate
 /// here is an absent one.
@@ -530,12 +555,28 @@ Result IFE_EXPORT validate_file_structure(const FileAccessInfo& __info) noexcept
     // streams, which have no header, and the structures nested inside
     // attribute values.
     try {
-        const std::string tiles = walk_tile_entries(header, __info.file_size,
-                                                    [](std::uint32_t, std::uint64_t, Offset, std::uint32_t) {});
+        // Under TILE_ENCODING_AV1 every stream's first sequence header is
+        // checked (D31); the first that fails is kept, naming its tile.
+        const auto          table   = header.tile_table_offset();
+        const std::uint16_t length  = tile_length(table);
+        const bool          is_av1  = table.encoding() == k::TileEncodings::TILE_ENCODING_AV1;
+        std::string         stream_error;
+        const std::string tiles = walk_tile_entries(
+            header, __info.file_size,
+            [&__info, &stream_error, is_av1, length](std::uint32_t layer, std::uint64_t tile,
+                                                             Offset offset, std::uint32_t size) {
+                if (!is_av1 || offset == k::NULL_TILE || !stream_error.empty()) return;
+                const std::string why = av1_stream_error(
+                    detail::check_av1_tile_stream(__info.file_ptr + offset, size, length));
+                if (!why.empty())
+                    stream_error = "Layer " + std::to_string(layer) + ", tile " + std::to_string(tile) +
+                                   " (OFFSET " + std::to_string(offset) + ", SIZE " +
+                                   std::to_string(size) + "): the AV1 stream " + why;
+            });
         if (!tiles.empty()) return failure(FileError::BAD_TILE_ENTRY, tiles);
-        const auto table = header.tile_table_offset();
-        if (const std::string mips = mip_levels_error(table, tile_length(table)); !mips.empty())
+        if (const std::string mips = mip_levels_error(table, length); !mips.empty())
             return failure(FileError::CONFORMANCE, mips);
+        if (!stream_error.empty()) return failure(FileError::CONFORMANCE, stream_error);
 
         const auto metadata = header.metadata_offset();
         if (!metadata) return to_result(metadata.validate());

@@ -1936,6 +1936,63 @@ def _check_lines(block: str, field: FieldLayout, value: str, types: dict[str, An
     return out
 
 
+# The tile encodings whose byte-stream clause the conformance layer checks,
+# each with the hand-written check in include/IFE_Av1.hpp that reads the
+# stream, and the diagnostic. A tile stream has no CreateInfo (TILE_PIXEL_DATA's
+# is its frame), so no field clause in spec/ife_fields.json can describe it;
+# the clause is the specification's prose, cited by its anchor (D31, TE-3).
+_STREAM_CLAUSES: dict[str, tuple[str, str]] = {
+    "TILE_ENCODING_AV1": (
+        "::Iris::File::detail::check_av1_tile_stream",
+        "TILE_PIXEL_DATA under TILE_ENCODING_AV1 shall open with a sequence header declaring 8-bit "
+        "4:2:0 or 4:4:4 colour with the BT.601 matrix at full range, one operating point, frames of "
+        "TILE_LENGTH square, no superres and no film grain. Per the IFE specification, clause "
+        "ife-tile-av1.",
+    ),
+}
+
+
+def _emit_tile_stream_check(constants_doc: dict[str, Any]) -> list[str]:
+    """check_tile_stream: one case per tile encoding, so a new encoding fails
+    -Wswitch here until someone decides whether its stream has a clause."""
+    members = [
+        member
+        for entries in constants_doc.get("tile_encodings", {}).get("ife_version", {}).values()
+        for member in entries
+    ]
+    unknown = sorted(set(_STREAM_CLAUSES) - set(members))
+    if unknown:
+        raise SpecError(f"stream clauses name tile encodings the schema does not declare: {unknown}")
+    enum = "::Iris::File::constants::TileEncodings"
+    out = [
+        "",
+        "// ---- tile byte-streams ----",
+        f"Status check_tile_stream({enum} encoding, std::uint16_t tile_length,",
+        "                         const ::Iris::File::BYTE* stream, ::Iris::File::Size size,",
+        "                         ::Iris::File::Offset at, const ValidationHooks* hooks) noexcept {",
+        "    switch (encoding) {",
+    ]
+    unchecked = [m for m in members if m not in _STREAM_CLAUSES]
+    out += [f"        case {enum}::{m}:" for m in unchecked]
+    out += ["            return {};"]
+    for member, (checker, message) in _STREAM_CLAUSES.items():
+        out += [
+            f"        case {enum}::{member}: {{",
+            f"            const auto finding = {checker}(stream, size, tile_length);",
+            "            if (finding) return {};",
+            f'            __report(hooks, "{message}");',
+            '            return {Check::CONFORMANCE, "TILE_PIXEL_DATA", finding.field, finding.found,',
+            "                    finding.expected, at};",
+            "        }",
+        ]
+    out += [
+        "    }",
+        "    return {};   // an undeclared ENCODING, which check_TILE_TABLE refuses",
+        "}",
+    ]
+    return out
+
+
 def emit_validation_source(
     layout: LayoutResult, constants_doc: dict[str, Any], types: dict[str, Any],
     header: dict[str, Any], witness_hash: str
@@ -1947,9 +2004,12 @@ def emit_validation_source(
         "// costing a null check when absent, and free to be verbose because it",
         "// never runs in a shipped product's hot path. Every check below is",
         "// generated from a normative clause in spec/ife_fields.json, so a",
-        "// diagnostic and the published specification cite one source.",
+        "// diagnostic and the published specification cite one source. The",
+        "// one exception is check_tile_stream: a tile stream has no fields, so its",
+        "// clause is the specification's prose, cited by its anchor.",
         "",
         '#include "IFE_Validation.hpp"',
+        '#include "IFE_Av1.hpp"',
         "",
         "namespace Iris::File {",
         "namespace blocks {",
@@ -2048,6 +2108,8 @@ def emit_validation_source(
             "}",
         ]
 
+    out += _emit_tile_stream_check(constants_doc)
+
     out += [
         "",
         "const ValidationHooks& conformance_layer() noexcept {",
@@ -2102,6 +2164,24 @@ def emit_validation_header(
         "/// Copy the returned struct before setting `diagnostic` or `next` -- the",
         "/// layer itself is shared and immutable.",
         "[[nodiscard]] const ValidationHooks& conformance_layer() noexcept;",
+        "",
+        "/// A tile byte-stream checked against its tile encoding's clause, which no",
+        "/// store() can do: the runtime places a stream with no CreateInfo (the",
+        "/// TILE_PIXEL_DATA store writes only the frame before it). An encoder",
+        "/// that builds with the layer calls it on each stream before",
+        "/// `append_tile`. Under TILE_ENCODING_AV1 it reads the stream's first",
+        "/// sequence header (spec, AV1 Tile Byte-Streams); under every other",
+        "/// encoding it reads nothing and passes. A failure is CONFORMANCE on",
+        "/// TILE_PIXEL_DATA, `field` the AV1 syntax element and `found` its value;",
+        "/// `diagnostic`, when set, receives the clause.",
+        "///",
+        "/// `tile_length` is the slide's tile edge in pixels, resolved from",
+        "/// TILE_LENGTH (256 where it is zero); `at` is the stream's offset, carried",
+        "/// into the Status.",
+        "[[nodiscard]] Status check_tile_stream(::Iris::File::constants::TileEncodings encoding,",
+        "                                       std::uint16_t tile_length,",
+        "                                       const ::Iris::File::BYTE* stream, ::Iris::File::Size size,",
+        "                                       ::Iris::File::Offset at, const ValidationHooks* hooks) noexcept;",
         "",
         "}  // namespace blocks",
         "}  // namespace Iris::File",

@@ -87,6 +87,15 @@ The line runs between the stream and everything describing it:
   `ife_v1_oracle_tests` asserts them by the hundred.
 * **Out of scope** — what the compressed bytes decode to, whether a JPEG is
   valid, anything requiring a codec.
+* **The one exception** — a `TILE_ENCODING_AV1` stream's first sequence
+  header (D31, decided 2026-11-26). It declares the colour conversion and the
+  frame size every frame decodes to, which a slide must fix as JPEG's JFIF
+  does, so `validate_file_structure` and the validation layer's
+  `check_tile_stream` read that one OBU with the bounded parser in
+  `include/IFE_Av1.hpp`. Nothing past it is read, no frame header and no tile
+  data, and the read path and the Builder still never parse a stream. A test
+  that writes AV1 tiles through `validate_file_structure` therefore writes a
+  real sequence header in front of its filler (`ife_av1_tile_stream_tests`).
 
 The same line explains the byte-array blocks: IFE checks that a run is sliced
 where its sizes entry says, never what the slice means. `ICC_PROFILE` bytes are
