@@ -88,6 +88,7 @@ verdict_case(breaks "" new old FAIL "This change breaks Iris-Slide at main")
 verdict_case(unpaired-green "" both old PASS "Iris-Slide at main builds against the change")
 verdict_case(already-broken "" neither neither PASS "already broken, not blocked by this change")
 verdict_case(no-such-pair feature/NoPair new old FAIL "This change breaks Iris-Slide at main")
+verdict_case(semicolon "feature/a\\;b" new old FAIL "HEAD_REF holds ';'")
 
 if(failures GREATER 0)
     message(FATAL_ERROR "downstream_iris_slide_test: ${failures} case(s) failed")

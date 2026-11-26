@@ -223,12 +223,11 @@ jobs:
       # (cmake/downstream_iris_slide.cmake, tested by
       # cmake/tests/downstream_iris_slide_test.cmake in the spec job); the
       # branch name is text the author chose, so it reaches it through env:.
-      # Build-only, matching Iris-Slide's own CI. nasm (for the aom port),
-      # Ninja and pkg-config are the system tools Iris-Slide's
-      # .github/workflows/_build.yml installs because vcpkg cannot fetch them
-      # on Blacksmith's Linux runners; vcpkg builds every library.
+      # Build-only, matching Iris-Slide's own CI. The system tools are the ones
+      # Iris-Slide's vcpkg ports need and vcpkg cannot fetch
+      # (cmake/downstream_tools.cmake); vcpkg builds every library.
       - name: The system tools Iris-Slide's vcpkg ports need
-        run: sudo apt-get update --quiet && sudo apt-get install --yes --no-install-recommends nasm ninja-build pkg-config
+        run: cmake -P cmake/downstream_tools.cmake
       - name: Iris-Slide (its paired branch, then main) built against this change
         env:
           HEAD_REF: ${{ github.head_ref }}

@@ -220,7 +220,11 @@ using Buffer = std::shared_ptr<Buffer_t>;    // what everyone holds
 ```
 
 The `_t` types live in a namespace (`Iris`), outside the global names POSIX
-reserves for its own `_t` types.
+reserves for its own `_t` types. An object made from a descriptor is made by
+`create_<name>(const <Name>Desc&, <Name>& out)` returning a `Result`
+(`create_parser(const ParserDesc&, Parser&)`); the descriptor is a separate
+`<Name>Desc` because a nested type cannot hang off a pointer alias (adopted
+2026-11-26, R-8).
 
 Work items are named as [WBS.md](WBS.md) numbers them (`CI-2.4`, `VL-1.1`,
 `RC-10`), and a branch is `<kind>/<WorkPackage>_<n>` after one of them.
