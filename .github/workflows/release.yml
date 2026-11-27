@@ -32,20 +32,23 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
-# Read-only by default. Only publish writes, and only a release; stated once
-# here so the whole grant is visible in one place.
-permissions:
-  contents: read
+# Nothing by default (ActionPins_CI-4.2); each job reads the repository, and only publish
+# writes, and only a release.
+permissions: {}
 
 jobs:
   verify:
+    permissions:
+      contents: read
     name: tag and specification agree
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 10
     outputs:
       version: ${{ steps.guard.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # tools/release_guard.py carries the reasoning and the exit codes -- read
       # it for why a draft revision cannot ship. It writes `version` whether or
@@ -63,6 +66,8 @@ jobs:
         continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
 
   package:
+    permissions:
+      contents: read
     name: ${{ matrix.name }}
     needs: verify
     runs-on: ${{ matrix.os }}
@@ -92,7 +97,9 @@ jobs:
       CMAKE_BUILD_PARALLEL_LEVEL: ${{ matrix.jobs }}
       MACOSX_DEPLOYMENT_TARGET: ${{ matrix.osx_target }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Configure
         shell: bash
@@ -162,20 +169,24 @@ jobs:
             tar -czf "$PKG.tar.gz" "$PKG"
           fi
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ env.PKG }}
           path: stage/${{ env.PKG }}.*
           if-no-files-found: error
 
   document:
+    permissions:
+      contents: read
     name: specification document
     needs: verify
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@145243922b4465b78e04dd66294782c7de45901f # v1.345.0
         with:
           ruby-version: '3.3'
           bundler-cache: false
@@ -197,7 +208,7 @@ jobs:
           mv ife_spec.pdf  "IFE-specification-${version}.pdf"
           mv ife_spec.html "IFE-specification-${version}.html"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: specification
           path: doc/
@@ -211,6 +222,8 @@ jobs:
   # tables ship rendered, in the document job's PDF and HTML, under the
   # specification's own terms; this archive carries the code's licence.
   generated:
+    permissions:
+      contents: read
     name: generated source
     needs: verify
     runs-on: blacksmith-2vcpu-ubuntu-2404
@@ -240,9 +253,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           path: artifacts
           merge-multiple: true
@@ -263,14 +278,19 @@ jobs:
       # body from it is what stops a second, disagreeing account of the same
       # release being typed here.
       - name: Render the release body
-        run: python3 tools/release_guard.py --tag "${{ github.ref_name }}" --notes-file notes.md
+        env:
+          TAG: ${{ github.ref_name }}
+        run: python3 tools/release_guard.py --tag "$TAG" --notes-file notes.md
 
       - name: Create the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ needs.verify.outputs.version }}
         run: >
-          gh release create "${{ github.ref_name }}"
-          --repo "${{ github.repository }}"
-          --title "Iris File Extension ${{ needs.verify.outputs.version }}"
+          gh release create "$TAG"
+          --repo "$REPOSITORY"
+          --title "Iris File Extension $VERSION"
           --notes-file notes.md
           artifacts/*
