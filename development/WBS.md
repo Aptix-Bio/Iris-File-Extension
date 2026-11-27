@@ -72,6 +72,7 @@ touch different files from the recovery lane and can run beside it.
 | TE-1 | tile encoding value 3 is `TILE_ENCODING_AV1`, a bare AV1 sequence, in place of AVIF | `doing` (pull request #7, stacked on #6); TE-1.4 `blocked` on OD-T1 |
 | IV-1 | `ATTRIBUTES.VERSION` under `METADATA_I2S` is the I2S version packed as `major << 8 \| minor` (D27) | `doing` (pull request #8, stacked on #7) |
 | TE-2 | tile encodings 4 and 5 are `TILE_ENCODING_UASTC` and `TILE_ENCODING_XUASTC`, bare GPU block-compressed streams | `doing` (pull request #9, stacked on #8); TE-2.5 `blocked` on OD-T3, TE-2.6 on OD-T4 |
+| ReviewRubric_1 | the rubric's MinimumSurface item allows the stream-header reads `external_check` lists (D31) | `doing` (branch `docs/ReviewRubric_1`; its pull request follows #11) |
 | CI-1 | every CI job on a pinned Blacksmith runner | `done`; VERIFY and the macOS gating owed |
 | VL-1 | the validation layer's diagnostic sink is safe under a multithreaded writer | `todo` (P1, latent) |
 | RB-4 to RB-9 | the recovery census grows its solver, tile streams, report, apply and calibration | `todo`; RB-5 to RB-7 wait on OD-R1, OD-R3, OD-R4, OD-R5 defaults |
@@ -223,6 +224,21 @@ Iris-Slide requirement. [Wire_09, Wire_10, Wire_11, Wire_12]
   - [x] TE-2.4.4 **Review fixes.** `mip_levels` and `mip_levels_error` name their parameter `table` instead of the reserved `__table`; the tile edge is resolved once, by `tile_length`, whose default is `Abstraction::TileTable`'s, and `mip_levels_error` takes the resolved length, so `IFE_Runtime.cpp` no longer states 256 a second time (`DEFAULT_TILE_LENGTH` removed). Evidence: ctest 26 of 26 (Release, AppleClang) and 26 of 26 under ASan and UBSan; `--validate`, `--check` and both lints pass. [87f7a8a](https://github.com/Aptix-Bio/Iris-File-Extension/commit/87f7a8a7eae8282aa53ac7182e31990ede5f8b29)
 - [ ] TE-2.5 **XUASTC's block footprint and bitstream stability.** `blocked` on OD-T3. The specification takes the footprint from the bitstream and marks both open.
 - [ ] TE-2.6 **How an XUASTC tile carries levels beyond level 0.** `blocked` on OD-T4. `MIP_LEVELS` is 0 or 1 under XUASTC until it is decided.
+
+## ReviewRubric_1 — MinimumSurface allows the header reads `external_check` lists `doing`
+
+Decided 2026-11-26: the review rubric's MinimumSurface item allows a reader
+that takes a tile stream's own header elements to check that they agree with
+IFE's blocks, where each agreement is an entry of the schema's
+`external_check` section and its comparison is generated (D31, delivered by
+TE-3). Code that decodes, transforms or colour-converts tile pixel data, or
+checks a rule of the stream's own that no IFE field states, still fails. The
+rubric is a code-owner file read from the default branch, so this merges
+before TE-3's pull request is reviewed: #11, then this, then TE-3. Branch
+`docs/ReviewRubric_1`.
+
+- [x] ReviewRubric_1.1 **The MinimumSurface guidance is narrowed.** `.github/review/rubric.toml`, item MinimumSurface. A document change, with no red step. Evidence: `cmake -P cmake/check_review_configuration.cmake` passes. [9ec18a9](https://github.com/Aptix-Bio/Iris-File-Extension/commit/9ec18a90ad379e91c5f5ab80c09c9bd9ee74dfae)
+- [ ] ReviewRubric_1.2 **VERIFY:** the maintainer reviews the rubric change (CODEOWNERS).
 
 ## VL-1 — The validation layer's diagnostic sink under a multithreaded writer `todo` (P1, latent)
 
