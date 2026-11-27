@@ -1,6 +1,6 @@
 /**
  * @file IFE_Recovery.hpp
- * @brief Iris File Extension recovery: the census (development/WBS.md, RB-3).
+ * @brief Iris File Extension recovery: the census (RB-3).
  * @copyright Iris Developers, 2025-2026
  *
  * This header also carries the file map the census works over — the
@@ -73,7 +73,7 @@ enum IFE_EXPORT MapEntryType {
     MAP_ENTRY_TILE_FRAME,
 };
 
-/// Why a run of bytes belongs to no file-map entry (RC-2.3; development/WBS.md, closed work).
+/// Why a run of bytes belongs to no file-map entry (RC-2.3, closed).
 enum class IFE_EXPORT GapClass : uint8_t {
     Hole = 0,        ///< unattributed, and large enough to have been a block.
                      ///< A block whose VALIDATION AND parent reference are

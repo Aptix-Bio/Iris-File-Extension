@@ -4,8 +4,8 @@
 Decided 2026-11-24: CI runs on Blacksmith runners. A
 GitHub-hosted label (ubuntu-24.04, macos-26, windows-2025) bills GitHub
 minutes, which stopped starting jobs in Aptix-Bio's private repositories that
-day; a -latest label lets the image move under a passing build (Arbiter
-directives/ci_runners.md, "Pin what can move").
+day. Labels are pinned because a -latest label lets the runner's image move
+under a passing build.
 
 Labels are matched as text wherever they appear outside a comment, so a label
 in a matrix entry is checked the same as one written after runs-on. The

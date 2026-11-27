@@ -2,7 +2,8 @@
 
 Thanks for contributing. IFE is a binary slide format — the bar for
 correctness is high, and a few rules are absolute. Read `README.md`,
-`development/README.md` (how work is planned and tracked), and this page
+`development/README.md` (how a change moves through review),
+`development/ARCHITECTURE.md` (the decisions the code follows) and this page
 before opening a PR.
 
 ## The absolutes
@@ -117,11 +118,79 @@ Traps that have already cost this project time:
   test — which is why a manifest entry must never name an object that is not
   yet hosted. A build with tests off never contacts the host at all.
 
+## The code rules
+
+What a pull request's code is held to in this repository, beyond the
+absolutes above. The family's general conventions (control flow, resources,
+prose) are kept privately; the review bot's findings name the rule they apply,
+and where this list is more specific, it wins.
+
+### The specification and generated code
+
+The format is defined by `spec/*.json`, and the C++ that lays out its bytes is
+generated from them (`spec/README.md`, `generator/README.md`).
+
+- **The JSON is the one source of every wire fact.** An offset, a size, a
+  recovery tag or an enumeration value is derived by the generator; code,
+  tests and documents refer to the generated name instead of a copied number,
+  which would drift silently from the specification.
+- **Append-only, and generated output is never edited or committed** (the
+  absolutes, above). A fix goes into the emitter under `generator/emit/`.
+- **Little-endian on disk, on every host.** File bytes are read and written
+  through `include/IFE_Bytes.hpp` or the generated handles; a pointer into the
+  file is never cast to a multi-byte type, since that reads host byte order.
+- **No reserved identifiers in new names**: no leading underscore followed by
+  an uppercase letter, no two underscores in a row, no leading underscore at
+  global scope. Existing parameters named `__name` are renamed only by a
+  change that is about them.
+
+### Errors at the public boundary
+
+- **Every public function returns an `Iris::Result`** under
+  `Iris::Domain::IRIS_FILE_EXTENSION`, carrying an error code, the offending
+  value and where it failed, and is `noexcept`; no exception crosses it.
+- **A value is written through the function's last, non-`const` reference
+  parameter**, only on success, so a failed call leaves it as the caller had
+  it: `Result abstract_file_structure(const FileAccessInfo&,
+  Abstraction::File&) noexcept` (D30). There is no value-carrying result type
+  (`ResultOf<T>`, `Expected<T>`, `std::expected`): one mechanism serves every
+  boundary.
+- **Inside the library the code throws** at the point of failure. Each public
+  function's body runs inside `boundary()` (`src/IFE_Failure.hpp`), which
+  catches by type: a thrown `Failure` keeps its `FileError` and the place it
+  was thrown, and `catch (...)` is only its last handler. Nothing is printed
+  to `std::cout` or `std::cerr` in place of returning the failure.
+
+### Types and names
+
+- **A `switch` over an enumeration is exhaustive, with no `default:`**, so a
+  new member is a compile error at every switch that misses it (CLAUDE.md,
+  Warnings).
+- **The format's values are referred to by their generated names**, which
+  come from `spec/*.json`; a name becomes its raw number only at the file.
+- **Shared types take the plain name.** A type owned by `std::shared_ptr` is
+  known by the pointer alias; the class it owns is that name with the suffix
+  `_t`, in namespace `Iris`. An object made from a descriptor is made by
+  `create_<name>(const <Name>Desc&, <Name>& out)` returning a `Result`, as
+  `create_parser(const ParserDesc&, Parser&)` (adopted 2026-11-26, R-8); the
+  descriptor is a separate `<Name>Desc` because a nested type cannot hang off
+  a pointer alias.
+- **A data member** is `_leading_underscore` or `m_name`, as the surrounding
+  code does.
+- **Iris-Headers' vocabulary is reused**: `Result`, `Buffer`, `Memory` and
+  the rest. A new IFE type that does what one of them does is a finding.
+
+### Comments
+
+Block comments state the intent where the *why* is not visible in the code:
+the write head's claim protocol, the tile frame's backward layout, byte order
+and recovery tags. A comment that restates the code is replaced by clearer
+code, and dead code is deleted; git keeps the history.
+
 ## Picking work
 
-Pending work lives in `development/WBS.md`, each item under the ID it has
-carried since it was filed (`RB-5`, `RC-10.4`, `R-3.1`). Name the branch after
-the item (`<kind>/<WorkPackage>_<n>`), keep the diff scoped to that item, and
-tick each step with its evidence and the commit that did the work
-(`development/README.md`, update rule). The dated records behind the items are
-in `development/analysis/`.
+Each work item keeps the ID it has carried since it was filed (`RB-5`,
+`RC-10.4`, `R-3.1`, `ReviewRubric_1`); the work breakdown that lists them is
+kept privately. Name the branch after the item (`<kind>/<WorkPackage>_<n>`),
+keep the diff scoped to that item, and name the items and the requirement
+rows it advances in the pull request (`development/README.md`, update rule).

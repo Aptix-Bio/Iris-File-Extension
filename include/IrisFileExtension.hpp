@@ -19,9 +19,11 @@
  * `FileAccessInfo` argument (mapped pointer + size), and `Result` returns.
  * Every one is `noexcept`: no exception crosses this API. A function that
  * produces a value writes it through its last, non-`const` reference argument
- * and still returns the `Result`; the value is written only on success
- * (development/style_guide.md, Errors). Iris-Slide consumes this surface
- * directly.
+ * and still returns the `Result`; the value is written only on success, so a
+ * failed call leaves the caller's value as it was. One mechanism serves every
+ * boundary, with no value-carrying result type, so a consumer handles every
+ * failure the same way and none unwinds into its code. Iris-Slide consumes
+ * this surface directly.
  */
 
 #ifndef IRIS_FILE_EXTENSION_HPP

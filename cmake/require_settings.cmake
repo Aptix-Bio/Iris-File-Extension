@@ -1,4 +1,4 @@
-# CI-3 (development/WBS.md; development/ci_runners.md, Settings): a job that needs repository or organization
+# CI-3 (development/PIPELINE.md, rule 17): a job that needs repository or organization
 # variables or secrets fails first, naming each one that is missing, instead of failing later
 # inside an action whose message does not say which setting to create.
 #
@@ -25,6 +25,6 @@ endforeach()
 if(missing)
     list(JOIN missing ", " names)
     message(FATAL_ERROR "missing repository setting(s): ${names}. Create each under Settings, "
-                        "Secrets and variables, Actions (development/ci_runners.md, Settings).")
+                        "Secrets and variables, Actions (development/PIPELINE.md, rule 17).")
 endif()
 message(STATUS "settings present: ${REQUIRED}")

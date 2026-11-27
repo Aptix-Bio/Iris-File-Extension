@@ -1,6 +1,6 @@
-# R-8 (development/WBS.md; PIPELINE.md, rule 12): the system tools the `downstream` job's Iris-Slide
-# build needs, as one `cmake -P` step (development/ci_runners.md, "Workflows are simple; CMake does
-# the work"). nasm (for the aom port), Ninja and pkg-config are what Iris-Slide's own
+# R-8 (development/PIPELINE.md, rule 12): the system tools the `downstream` job's Iris-Slide build
+# needs, as one `cmake -P` step whose logic is here, so the workflow holds no shell logic and the
+# same command runs locally. nasm (for the aom port), Ninja and pkg-config are what Iris-Slide's own
 # .github/workflows/_build.yml installs on Linux, because vcpkg cannot fetch them on Blacksmith's
 # Linux runners; vcpkg builds every library.
 #

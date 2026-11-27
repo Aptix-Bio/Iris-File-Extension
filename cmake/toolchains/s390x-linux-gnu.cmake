@@ -11,7 +11,7 @@
 # cmake run natively. The emulator is called directly, which needs no
 # binfmt_misc registration on the host: that registration is what failed on
 # Blacksmith's runner VMs when the job ran an s390x container instead
-# (development/WBS.md, CI-2).
+# (CI-2).
 #
 # Host packages (Ubuntu 24.04): g++-s390x-linux-gnu qemu-user
 #   g++-s390x-linux-gnu  the cross compiler and the s390x glibc it links

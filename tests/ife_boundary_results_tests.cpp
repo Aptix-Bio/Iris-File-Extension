@@ -1,9 +1,9 @@
 /**
  * @file ife_boundary_results_tests.cpp
- * @brief No exception crosses IFE's public read API (R-8, development/WBS.md):
- *        every read entry point is `noexcept`, returns an `Iris::Result`, and
- *        writes the value it produces through an output reference
- *        (development/style_guide.md, Errors).
+ * @brief No exception crosses IFE's public read API (R-8): every read entry
+ *        point is `noexcept`, returns an `Iris::Result`, and writes the value
+ *        it produces through an output reference, since an exception that
+ *        unwinds into a consumer loses the `FileError` validation reports.
  *
  * What this pins:
  *   1. The signature and `noexcept` of every converted function, at compile

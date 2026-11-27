@@ -25,7 +25,6 @@
 /.deps
 .vscode
 __pycache__/
-.arbiter/
 
 # Handoff documents, at any depth. These are working notes between sessions —
 # a record of what was measured and what fooled us, superseded the moment the

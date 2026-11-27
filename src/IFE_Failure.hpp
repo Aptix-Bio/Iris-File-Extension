@@ -1,7 +1,9 @@
 /**
  * @file IFE_Failure.hpp
  * @brief How a failure leaves IFE: thrown inside the module, returned as an
- *        `Iris::Result` at its boundary (development/style_guide.md, Errors).
+ *        `Iris::Result` at its boundary. Throwing inside lets RAII unwind a
+ *        failure from any depth without leaking; returning a `Result` at the
+ *        boundary keeps an exception from unwinding into a consumer's code.
  * @copyright Iris Developers, 2025-2026
  *
  * A read deep in the block graph throws a `Failure` at the point it fails,

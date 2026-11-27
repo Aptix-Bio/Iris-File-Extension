@@ -21,7 +21,7 @@ name: Release
 #
 # Runners: Blacksmith, at labels documented in
 # https://docs.blacksmith.sh/blacksmith-runners/overview (read 2026-11-24);
-# ci.yml gives the sizes (CI-1 in development/WBS.md).
+# ci.yml gives the sizes (CI-1).
 #
 # ci.yml is deliberately not re-run here. That is the gate on the commit; this
 # is the gate on the release. A tag pointing at a commit CI never passed is a

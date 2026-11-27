@@ -1,4 +1,4 @@
-# R-8 (development/WBS.md; PIPELINE.md, rule 12): cmake/downstream_iris_slide.cmake gives the
+# R-8 (development/PIPELINE.md, rule 12): cmake/downstream_iris_slide.cmake gives the
 # verdict its header states, including a coordinated change: green on Iris-Slide's paired branch
 # and red on Iris-Slide main fails until both pull requests merge.
 #
