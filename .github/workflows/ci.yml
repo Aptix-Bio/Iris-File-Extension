@@ -53,7 +53,8 @@ on:
     branches: [main, 'spec/**']
   pull_request:
 
-# ActionPins_CI-4.2: nothing is granted by default; each job reads the repository and no more.
+# ActionPins_CI-4.2: every grant is made per job, and each job is granted read access to the
+# repository alone.
 permissions: {}
 
 jobs:

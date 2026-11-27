@@ -32,8 +32,8 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
-# Nothing by default (ActionPins_CI-4.2); each job reads the repository, and only publish
-# writes, and only a release.
+# Every grant is made per job (ActionPins_CI-4.2): each job reads the repository, and publish
+# also writes the release.
 permissions: {}
 
 jobs:
