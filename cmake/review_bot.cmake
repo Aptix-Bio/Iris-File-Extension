@@ -5,7 +5,7 @@
 #   cmake -DSTEP=<transcript-key|review|publish|fork-notice> -P base/cmake/review_bot.cmake
 #
 # Run from the job's workspace, where the default branch is checked out at base/ and the bot at
-# governance/. The inputs come from the step's `env:`: PYTHON and SCRIPT (the bot's action
+# governance/. The inputs come from the step's `env:`: PYTHON, SCRIPT and PLANNING (the bot's action
 # outputs) and the values each command's table below names. Pull request data arrives only that
 # way and reaches the bot as separate arguments with no shell between, so no value is parsed as a
 # command. The bot's own output, and its step outputs in $GITHUB_OUTPUT, pass through unchanged.
@@ -18,10 +18,10 @@ set(transcript-key_arguments --pr PR_NUMBER)
 set(review_arguments
     --pr PR_NUMBER --base-dir =base --base-sha BASE_SHA --head-sha HEAD_SHA
     --rubric-commit RULES_SHA --bot-ref BOT_REF --run-url RUN_URL
-    --out =verdict.json --transcript =transcript.json)
+    --out =verdict.json --transcript =transcript.json --planning PLANNING)
 set(publish_arguments
     --pr PR_NUMBER --head-sha HEAD_SHA --rubric =base/.github/review/rubric.toml --base-dir =base
-    --verdict =verdict.json --run-url RUN_URL)
+    --verdict =verdict.json --run-url RUN_URL --planning PLANNING)
 
 # A fork's pull request gets no model review; the run says why instead. A workflow command must
 # begin its line, which message() would prefix, so it is printed through `cmake -E echo`.
