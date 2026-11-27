@@ -263,8 +263,9 @@ for (auto it = map.lower_bound(write_location); it != map.end(); ++it) {
 ### Recovering a Damaged File
 
 The recovery engine — the two-witness reconciliation that repairs a bit-flipped
-file — is **currently being rebuilt** against FastFHIR's census design (see
-`development/WBS.md`, RB-4 to RB-9). It is not present in this revision.
+file — is **currently being rebuilt** against FastFHIR's census design (work
+items RB-4 to RB-9; `development/ARCHITECTURE.md`, §5). It is not present in
+this revision.
 `generate_file_map` above is the remaining advanced entry point; until the
 engine returns, a file `abstract_file_structure` refuses cannot be reopened
 in-process.

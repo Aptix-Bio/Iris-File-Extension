@@ -1,4 +1,4 @@
-# Who must review what (CI-3, development/WBS.md). The review bot reads the logins on the last `*` line as
+# Who must review what (CI-3). The review bot reads the logins on the last `*` line as
 # the owners whose replies in a pull request's conversation may grant an exception to a rubric
 # item. GitHub applies the last pattern that matches a path ("the last matching pattern takes the
 # most precedence": docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners,
@@ -17,4 +17,5 @@
 /spec/                              @ryanlandvater
 /tests/wire/witness.json            @ryanlandvater
 /development/*.md                   @ryanlandvater
+/CONTRIBUTING.md                    @ryanlandvater
 /tools/                             @ryanlandvater

@@ -1,6 +1,6 @@
 /**
  * @file IFE_Recovery.cpp
- * @brief The recovery census (development/WBS.md, RB-3).
+ * @brief The recovery census (RB-3).
  * @copyright Iris Developers, 2025-2026
  *
  * A port of FastFHIR's census (its `src/FF_Recovery.cpp`, "PHASE 1",
@@ -676,7 +676,7 @@ Census take_census_of(const BYTE* base, Size size) {
 // A tile stream has no self-offset, so it is charged to the self-validating
 // tile offsets entry that names it, with its frame where one holds. The frame
 // SEARCH -- frames of streams whose entries are lost -- is the solver's
-// (development/WBS.md, RB-6): a bare 40-bit self-offset is too weak to scan for.
+// (RB-6): a bare 40-bit self-offset is too weak to scan for.
 FileMap scan_bytes(const BYTE* base, Size size) {
     FileMap map;
     map.file_size = size;

@@ -12,7 +12,7 @@
  * file. So the sweep's real value is under ASan/UBSan (CI's sanitizer leg,
  * `ctest --preset asan`), where it is the gate that catches the next one.
  *
- * Restored 2026-09-28 (development/WBS.md, RB-1) without the recovery engine it used
+ * Restored 2026-09-28 (RB-1) without the recovery engine it used
  * to drive; its repaired-copy half returns with the rebuilt engine.
  *
  * Single flips, one at a time, over every bit of every fixture — the shape of

@@ -1,4 +1,4 @@
-# CI-3 (development/WBS.md): the review bot's workflow keeps the
+# CI-3 (development/PIPELINE.md, rule 14): the review bot's workflow keeps the
 # safety properties that make `pull_request_target` safe in a public repository, and the files the
 # bot reads from the default branch exist.
 #
@@ -15,13 +15,17 @@
 #   - both review jobs run only for a pull request from a branch of this repository, and a
 #     fork's pull request gets a job, reading only its script, that states why it is skipped;
 #   - GOVERNANCE_READ_TOKEN reaches only the step that checks out Aptix-Bio/governance at the
-#     pinned commit, and every other action is pinned by a full commit SHA;
+#     pinned commit and, as `planning-token`, the bot's action, which checks out the private plans
+#     and conventions read-only; every other action is pinned by a full commit SHA;
 #   - pull request text reaches a `run:` script only through `env:`, and every job is bounded;
 #   - every `run:` step is one command, `cmake [-D<name>=<value>]... -P base/cmake/<name>.cmake`
-#     of a script that exists, its logic in the script (development/ci_runners.md, "Workflows are simple; CMake does the
-#     work"), so no shell line in the workflow can reach the model key or the write token.
+#     of a script that exists, its logic in the script, so no shell line in the workflow can reach
+#     the model key or the write token;
+#   - the rubric's own files exist, and the files it names in the bot's private checkout (the
+#     shared conventions, the plans, the traced plan files) are bare file names, so the public
+#     rubric carries no path into that checkout.
 # GitHub, "Securely using pull_request_target" and "Secure use reference" (docs.github.com,
-# read 2026-11-24) give the reasons; development/WBS.md, CI-3, the sources. The `spec` job in
+# read 2026-11-24) give the reasons; work item CI-3 records the sources. The `spec` job in
 # .github/workflows/ci.yml runs it on every pull request.
 cmake_minimum_required(VERSION 3.20)
 
@@ -164,6 +168,7 @@ escaped(base_checkout [=[ref: ${{ github.sha }}]=])
 escaped(governance_ref [=[ref: ${{ env.GOVERNANCE_COMMIT }}]=])
 escaped(token_use [=[token: ${{ secrets.GOVERNANCE_READ_TOKEN }}]=])
 escaped(token_check [=[GOVERNANCE_READ_TOKEN: ${{ secrets.GOVERNANCE_READ_TOKEN != '' }}]=])
+escaped(planning_token [=[planning-token: ${{ secrets.GOVERNANCE_READ_TOKEN }}]=])
 escaped(head_data [=[HEAD_SHA: ${{ github.event.pull_request.head.sha }}]=])
 set(fetches_code "(git (checkout|fetch|switch|clone|pull)|gh pr checkout|refs/pull/|github\\.head_ref)")
 
@@ -213,8 +218,8 @@ function(check_step_action step first)
     endif()
 endfunction()
 
-# Line by line: the head only as HEAD_SHA, the governance token only in its checkout or its
-# presence check, no expression inside a run: script, and each run: one `cmake -P` of a script in
+# Line by line: the head only as HEAD_SHA, the governance token only in its checkout, its presence
+# check or the bot's action's planning-token input, no expression inside a run: script, and each run: one `cmake -P` of a script in
 # the base checkout.
 function(check_step_lines step first)
     string(REPLACE "\n" ";" lines "${step}")
@@ -231,8 +236,12 @@ function(check_step_lines step first)
             problem("step '${first}': '${stripped}' uses the head beyond HEAD_SHA")
         endif()
         string(FIND "${line}" "secrets.GOVERNANCE_READ_TOKEN" at)
-        if(NOT at EQUAL -1 AND NOT stripped STREQUAL token_use AND NOT stripped STREQUAL token_check)
+        if(NOT at EQUAL -1 AND NOT stripped STREQUAL token_use AND NOT stripped STREQUAL token_check
+           AND NOT stripped STREQUAL planning_token)
             problem("step '${first}': '${stripped}' passes GOVERNANCE_READ_TOKEN beyond the governance checkout")
+        endif()
+        if(stripped STREQUAL planning_token AND NOT step MATCHES "(^|\n) *uses: \./governance/review-bot\n")
+            problem("step '${first}': planning-token is given to a step that is not the bot's action")
         endif()
         if(stripped STREQUAL token_use AND NOT step MATCHES "\n *repository: Aptix-Bio/governance\n")
             problem("step '${first}': the governance token is given to a step that is not the governance checkout")
@@ -282,19 +291,36 @@ endif()
 
 # --- what the bot reads from the default branch ---------------------------------------------
 file(READ "${REPOSITORY}/.github/review/rubric.toml" rubric)
-string(FIND "${rubric}" "reference_files = [" begin)
-set(references "")
-if(NOT begin EQUAL -1)
-    string(SUBSTRING "${rubric}" ${begin} -1 rest)
-    string(FIND "${rest}" "]" end)
-    string(SUBSTRING "${rest}" 0 ${end} rest)
-    string(REGEX MATCHALL "\"[^\"]+\"" references "${rest}")
-endif()
+# The quoted names of the list `key = [...]` (one line or several) at the start of a line of
+# `text`, empty when the key is absent; anchored at the line start, so `reference_files` does not
+# match inside `shared_reference_files`.
+function(rubric_list out text key)
+    set(names "")
+    string(FIND "${text}" "\n${key} = [" begin)
+    if(NOT begin EQUAL -1)
+        string(SUBSTRING "${text}" ${begin} -1 rest)
+        string(FIND "${rest}" "]" end)
+        string(SUBSTRING "${rest}" 0 ${end} rest)
+        string(REGEX MATCHALL "\"[^\"]+\"" names "${rest}")
+        list(TRANSFORM names REPLACE "\"" "")
+    endif()
+    set(${out} "${names}" PARENT_SCOPE)
+endfunction()
+# A name the bot resolves in its private checkout is a bare file name: a `/` or `..` would put a
+# path into that checkout in this public file.
+function(require_bare_names text key)
+    rubric_list(names "${text}" "${key}")
+    foreach(name IN LISTS names)
+        if(name MATCHES "[/\\]" OR name MATCHES "^\\.")
+            problem("the rubric's ${key} entry '${name}' is not a bare file name")
+        endif()
+    endforeach()
+endfunction()
+rubric_list(references "${rubric}" reference_files)
 if(NOT references)
     problem("the rubric names no reference_files")
 endif()
 foreach(reference IN LISTS references)
-    string(REPLACE "\"" "" reference "${reference}")
     if(NOT EXISTS "${REPOSITORY}/${reference}")
         problem("the rubric's reference file ${reference} is missing; the bot fails every review by name")
     endif()
@@ -302,11 +328,16 @@ endforeach()
 if(NOT rubric MATCHES "\n\\[trace\\]\n(#[^\n]*\n)*item = \"Traceability\"\n")
     problem("the rubric's [trace] table does not name the Traceability item")
 endif()
-# The files whose ticks and rows must link their work commit (development/WBS.md, development/RTM.md):
-# a [trace] entry naming a file that does not exist matches no line, so every tick would go
-# unchecked and the item would pass on nothing.
+foreach(key shared_reference_files plan_reference_files plan_excerpt_files)
+    require_bare_names("${rubric}" ${key})
+endforeach()
+# The files whose ticks and rows must link their work commit: this repository's own (ticks, rows),
+# which must exist, since a [trace] entry naming a missing file matches no line and every tick
+# would go unchecked; and the private plans' (plan_ticks, plan_rows), bare file names the bot
+# resolves in its checkout. At least one is named, or the item would pass on nothing.
 string(FIND "${rubric}" "\n[trace]\n" trace_at)
 set(traced "")
+set(plan_traced "")
 if(NOT trace_at EQUAL -1)
     math(EXPR trace_at "${trace_at} + 1")
     string(SUBSTRING "${rubric}" ${trace_at} -1 trace_text)
@@ -315,17 +346,19 @@ if(NOT trace_at EQUAL -1)
         string(SUBSTRING "${trace_text}" 0 ${next_table} trace_text)
     endif()
     foreach(key ticks rows)
-        if(trace_text MATCHES "\n${key} = \\[([^]\n]*)\\]")
-            string(REGEX MATCHALL "\"[^\"]+\"" names "${CMAKE_MATCH_1}")
-            list(APPEND traced ${names})
-        endif()
+        rubric_list(names "${trace_text}" ${key})
+        list(APPEND traced ${names})
+    endforeach()
+    foreach(key plan_ticks plan_rows)
+        require_bare_names("${trace_text}" ${key})
+        rubric_list(names "${trace_text}" ${key})
+        list(APPEND plan_traced ${names})
     endforeach()
 endif()
-if(NOT traced)
-    problem("the rubric's [trace] table names no ticks or rows file")
+if(NOT traced AND NOT plan_traced)
+    problem("the rubric's [trace] table names no ticks, rows, plan_ticks or plan_rows file")
 endif()
 foreach(name IN LISTS traced)
-    string(REPLACE "\"" "" name "${name}")
     if(NOT EXISTS "${REPOSITORY}/${name}")
         problem("the rubric's [trace] file ${name} is missing; its ticks would go unchecked")
     endif()

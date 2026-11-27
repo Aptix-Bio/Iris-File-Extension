@@ -1,9 +1,10 @@
 # Pipeline
 
 How a change to Iris-File-Extension moves from the specification to a tested,
-reviewed commit, and what CI checks on the way. The general CI rules are
-[ci_runners.md](ci_runners.md) and the code rules
-[style_guide.md](style_guide.md); these are the rules specific to this
+reviewed commit, and what CI checks on the way. The code rules a pull
+request is held to are in [CONTRIBUTING.md](../CONTRIBUTING.md); the family's
+general CI and code conventions are kept privately, and the review bot's
+findings name the rule they apply. These are the rules specific to this
 repository, numbered so a commit or a comment can cite one ("PIPELINE.md,
 rule 3"). Collected on 2026-11-24 from the rules the retired root documents
 carried (the migration phases, the cross-pollination and release work orders,
@@ -102,21 +103,39 @@ flowchart LR
     `cmake -P cmake/check_review_configuration.cmake` in the `spec` job holds
     those properties, that each `run:` step is one `cmake -P` of a script in
     the base checkout (`cmake/require_settings.cmake`, or
-    `cmake/review_bot.cmake` for a command of the bot), and that every file
-    the rubric names exists. A change to
-    the rubric, CODEOWNERS or `review.yml` needs the maintainer's explicit
-    attention.
+    `cmake/review_bot.cmake` for a command of the bot), that every file of
+    this repository the rubric names exists, and that the rubric names the
+    private plan and convention files by bare file name, since the bot's
+    action resolves them in its own read-only checkout and a public rubric
+    carries no path into it. A change to the rubric, CODEOWNERS or
+    `review.yml` needs the maintainer's explicit attention.
 15. **The release** (R-3). `release.yml` runs `verify` → `package`,
     `document` and `generated` → `publish` on a tag; `generated` archives the
     C++ layer as `IrisFileExtension-<version>-generated-source.tar.gz` (R-7); `tools/release_guard.py` requires the tag,
     the declared version and the revision's ratification to agree before a
     compiler runs, and refuses a draft. `workflow_dispatch` runs everything but
     `publish`.
-16. **Traceability.** A commit that changes code updates the WBS items it
-    completes and the RTM rows it touches in the same commit; the tick links
-    the commit that did the work, and a follow-up commit touching only
-    `development/WBS.md` and `development/RTM.md` adds the link when the work
-    commit cannot name its own hash ([README.md](README.md)).
+16. **Traceability.** A commit that changes code completes WBS items and
+    touches RTM rows. The WBS and RTM are kept privately (D25, amended
+    2026-11-27): each tick and each row moved to Implemented or Verified is
+    written there once the work commit is pushed to the pull request's branch,
+    linking that commit, and the pull request's description names the items
+    and rows. The review bot checks, without the model, that each named item
+    exists and that each tick and row links a commit of the pull request or of
+    `main` ([README.md](README.md)).
+17. **Settings.** The review bot (`.github/workflows/review.yml`, CI-3) needs
+    two secrets: `ANTHROPIC_KEY` (the model key) and `GOVERNANCE_READ_TOKEN`
+    (read access to the contents of Aptix-Bio/governance, where the bot lives,
+    and to the private plans and conventions it reviews against). Both are
+    Aptix-Bio organization secrets; an administrator adds or rotates them under
+    the organization's or this repository's Settings, Secrets and variables,
+    Actions. A repository secret of the same name takes precedence over the
+    organization's ("the secret at the lowest level takes precedence":
+    https://docs.github.com/en/actions/reference/security/secrets, read
+    2026-11-24); this repository holds its own `GOVERNANCE_READ_TOKEN`. Each
+    review job's settings check, the step after its base checkout, names any
+    that is missing (`cmake/require_settings.cmake`) without printing a value,
+    before an action fails without saying which setting to create.
 
 ## CI jobs
 

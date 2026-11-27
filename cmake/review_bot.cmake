@@ -1,6 +1,6 @@
-# CI-3 (development/WBS.md): one command of the review bot, so that each `run:` step of
-# .github/workflows/review.yml is one `cmake -P` and its logic is here (development/ci_runners.md,
-# "Workflows are simple; CMake does the work").
+# CI-3: one command of the review bot, so that each `run:` step of .github/workflows/review.yml is
+# one `cmake -P` and its logic is here, where it is checked and tested, and no shell line in the
+# workflow can reach the model key or the write token.
 #
 #   cmake -DSTEP=<transcript-key|review|publish|fork-notice> -P base/cmake/review_bot.cmake
 #
@@ -69,7 +69,7 @@ if(NOT result EQUAL 0)
     message(FATAL_ERROR "review_bot ${STEP}: the bot exited with '${result}'")
 endif()
 
-# An exit code of 0 with nothing written is a failure (development/ci_runners.md, Robustness).
+# An exit code of 0 with nothing written is a failure, since an empty verdict would publish no review.
 if(NOT STEP STREQUAL "review")
     return()
 endif()

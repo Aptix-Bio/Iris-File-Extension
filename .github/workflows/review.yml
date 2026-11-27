@@ -1,4 +1,4 @@
-# CI-3 (development/WBS.md): the Aptix governance review bot on every non-draft pull request, judging it
+# CI-3 (development/PIPELINE.md, rule 14): the Aptix governance review bot on every non-draft pull request, judging it
 # against this repository's rubric (.github/review/rubric.toml) and the documents it names. Two
 # jobs, so the job holding the model key cannot write to the pull request and the job that writes
 # never sees the key:
@@ -6,12 +6,13 @@
 #      item, saves it as the `review-verdict` artifact, and carries the pull request's review
 #      conversation in the Actions cache so each review adds to the one before it.
 #   2. Update PR from Agent: no key, pull-requests: write; ticks the "Agent review" boxes, posts
-#      one comment, checks that every new development/WBS.md tick and RTM.md row links its commit, and
-#      fails if a blocking item failed or job 1 did.
+#      one comment, checks that every work item and requirement row the description names exists
+#      and that each of their ticks and rows links a commit, and fails if a blocking item failed or
+#      job 1 did.
 # Both print the review to their log, each line starting `review_bot:`.
 #
-# Each `run:` step is one `cmake -P` of a script in the default branch's checkout
-# (development/ci_runners.md, "Workflows are simple; CMake does the work"):
+# Each `run:` step is one `cmake -P` of a script in the default branch's checkout, so its logic is
+# in a checked script and no shell line in the workflow can reach the model key or the write token:
 # cmake/require_settings.cmake checks the secrets, and cmake/review_bot.cmake runs one command of
 # the bot (STEP), with the values it passes read from the step's `env:`. The settings check is
 # each job's second step, after the checkout that brings its script: that checkout needs no

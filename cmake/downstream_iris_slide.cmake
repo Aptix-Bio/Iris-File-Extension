@@ -1,6 +1,6 @@
-# R-8 (development/WBS.md; PIPELINE.md, rule 12): ci.yml's `downstream` job, Iris-Slide built against
-# this change, as one `cmake -P` step (development/ci_runners.md, "Workflows are simple; CMake does
-# the work"). The verdict is the one Iris-Headers' downstream verdict gives its consumers:
+# R-8 (development/PIPELINE.md, rule 12): ci.yml's `downstream` job, Iris-Slide built against this
+# change, as one `cmake -P` step whose logic is here, so it runs the same on every runner's shell
+# and locally, and is tested (cmake/tests/downstream_iris_slide_test.cmake). The verdict is the one Iris-Headers' downstream verdict gives its consumers:
 #   change green                                 -> pass
 #   change red, base green                       -> this change breaks Iris-Slide: fail
 #   change red, base red                         -> Iris-Slide is already broken: warn, pass

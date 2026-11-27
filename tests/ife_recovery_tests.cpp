@@ -1,6 +1,6 @@
 /**
  * @file ife_recovery_tests.cpp
- * @brief The recovery census (development/WBS.md, RB-3), tested as FastFHIR tests
+ * @brief The recovery census (RB-3), tested as FastFHIR tests
  *        its own (FastFHIR's `tests/cpp/test_recovery.cpp`: check_clean_census,
  *        census_single_flip_sweep).
  *

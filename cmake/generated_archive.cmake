@@ -1,13 +1,13 @@
-# R-7 (development/WBS.md): the generated C++ layer as a release archive, for release.yml's
-# `generated` job, so that its one `run:` step is a `cmake -P` and its logic is here
-# (development/ci_runners.md, "Workflows are simple; CMake does the work").
+# R-7: the generated C++ layer as a release archive, for release.yml's `generated` job, so that its
+# one `run:` step is a `cmake -P` and its logic is here, where it runs the same on every runner's
+# shell and locally.
 #
 #   PKG=IrisFileExtension-<version>-generated-source cmake -P cmake/generated_archive.cmake
 #
 # Run from the directory the archive is written in. Runs generate_IFE.py, the command CMake runs
 # at configure, into stage/<PKG>/generated_source, adds LICENSE, the code's licence, and writes
 # stage/<PKG>.tar.gz. Exits non-zero naming the step that failed, or when the archive is missing
-# or empty (development/ci_runners.md, Robustness).
+# or empty, since an exit code of 0 with nothing written would publish an empty release asset.
 cmake_minimum_required(VERSION 3.20)
 
 set(package "$ENV{PKG}")
