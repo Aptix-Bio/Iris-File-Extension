@@ -100,6 +100,9 @@ flowchart LR
 14. **The review bot** (D24). `.github/workflows/review.yml` runs on
     `pull_request_target`, checks out only the default branch's commit and the
     bot's pinned commit, runs nothing from the head, and holds least privilege;
+    `GOVERNANCE_READ_TOKEN` reaches the governance checkout and, as
+    `planning-token`, the bot's action, which fetches the private plans and
+    conventions read-only, and no other step;
     `cmake -P cmake/check_review_configuration.cmake` in the `spec` job holds
     those properties, that each `run:` step is one `cmake -P` of a script in
     the base checkout (`cmake/require_settings.cmake`, or
