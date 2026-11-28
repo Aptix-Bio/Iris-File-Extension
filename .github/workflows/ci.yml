@@ -53,15 +53,27 @@ on:
     branches: [main, 'spec/**']
   pull_request:
 
+# CI-4.2 (RTM Pipeline_04): every grant is made per job, so a compromised step's token is limited
+# to reading the repository.
+permissions: {}
+
 jobs:
   spec:
+    permissions:
+      contents: read
     name: spec documents and drift
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Every job on a pinned Blacksmith runner
         run: python3 tools/runner_labels_lint.py
+      # CI-4.3 (RTM Pipeline_04): each action pinned by its commit, each grant made per job, each
+      # checkout without the token.
+      - name: Every action pinned and every grant per job
+        run: python3 tools/workflow_pins_lint.py
       # CI-3: review.yml runs under pull_request_target with the model key;
       # this fails a change that would let it check out or run a pull
       # request's code, widen a job's token, or move a secret.
@@ -91,6 +103,8 @@ jobs:
         run: python3 tools/portability_lint.py
 
   tests:
+    permissions:
+      contents: read
     name: build and test (${{ matrix.compiler }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -113,11 +127,13 @@ jobs:
           - {os: blacksmith-6vcpu-macos-26, jobs: 6, compiler: Xcode, generator: Xcode}
           - {os: blacksmith-2vcpu-windows-2025, jobs: 2, compiler: MSVC}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # .deps/corpus is fetched from examples.iris.aptix.bio at configure (see
       # tools/fetch_corpus.py); cache it by manifest digest so a fresh runner
       # never touches the external host — the fetch script's own guarantee.
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .deps/corpus
           key: corpus-${{ hashFiles('tests/corpus/manifest.json') }}
@@ -128,7 +144,7 @@ jobs:
       # whole job — configure, build and test then all see the same toolchain.
       - name: Set up the MSVC developer environment
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
       # The configuration is named three times on purpose. Visual Studio is a
       # multi-config generator: it ignores CMAKE_BUILD_TYPE and picks a
       # configuration when it builds and again when it tests. Omit --config
@@ -147,6 +163,8 @@ jobs:
       - run: ctest --test-dir build -C Release --output-on-failure
 
   bazel:
+    permissions:
+      contents: read
     name: bazel build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -155,7 +173,9 @@ jobs:
       matrix:
         os: [blacksmith-2vcpu-ubuntu-2404, blacksmith-2vcpu-windows-2025]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # MODULE.bazel resolves Iris-Headers via local_path_override
       # ../Iris-Headers (the sibling-checkout layout of local development);
       # CI materializes exactly that layout. Plain git, not actions/checkout:
@@ -177,7 +197,7 @@ jobs:
             rm -rf ../Iris-Headers
             git clone --depth 1 https://github.com/Aptix-Bio/Iris-Headers.git ../Iris-Headers
           fi
-      - uses: bazel-contrib/setup-bazel@0.19.0
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
         with:
           bazelisk-cache: true
           disk-cache: ${{ github.workflow }}
@@ -195,13 +215,17 @@ jobs:
         run: bazel test //... --test_output=errors --verbose_failures --action_env=PATH
 
   downstream:
+    permissions:
+      contents: read
     name: Iris-Slide builds against this branch
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 45
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # The base, for the control builds: a red build against the change is
       # this change's fault only if the same build is green against the base.
       - name: The base (control)
@@ -237,16 +261,20 @@ jobs:
         run: cmake -DCHANGE="$GITHUB_WORKSPACE" -DBASE="$GITHUB_WORKSPACE/downstream-base" -P "$GITHUB_WORKSPACE/cmake/downstream_iris_slide.cmake"
 
   sanitizers:
+    permissions:
+      contents: read
     name: address and undefined behaviour
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 60
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # Corpus cache as in the tests job: fresh runners must not hit the
       # external host for the two pinned fixtures.
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .deps/corpus
           key: corpus-${{ hashFiles('tests/corpus/manifest.json') }}
@@ -260,12 +288,16 @@ jobs:
       - run: ctest --test-dir build-asan --output-on-failure
 
   document:
+    permissions:
+      contents: read
     name: specification document
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@145243922b4465b78e04dd66294782c7de45901f # v1.345.0
         with:
           ruby-version: '3.3'
           bundler-cache: false
@@ -278,18 +310,22 @@ jobs:
       - name: Build HTML and PDF
         run: spec/build_document.sh "$GITHUB_WORKSPACE/build/doc"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ife-specification
           path: build/doc/
 
   wasm:
+    permissions:
+      contents: read
     name: emscripten (the residency branch)
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: mymindstorm/setup-emsdk@v16
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
 
       # src/IFE_Window.cpp holds the project's only __EMSCRIPTEN__ branch, and
       # no other job compiles it: every native build takes the other side of
@@ -304,6 +340,8 @@ jobs:
             -o /tmp/ife_window_wasm.o
 
   big-endian:
+    permissions:
+      contents: read
     name: big-endian (s390x)
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 30
@@ -311,6 +349,8 @@ jobs:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # A cross compiler and user-mode QEMU on the host, with no container:
       # cmake/toolchains/s390x-linux-gnu.cmake names qemu-s390x as the
       # CMAKE_CROSSCOMPILING_EMULATOR, so ctest calls the emulator directly
