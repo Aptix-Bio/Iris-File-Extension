@@ -53,8 +53,8 @@ on:
     branches: [main, 'spec/**']
   pull_request:
 
-# ActionPins_CI-4.2: every grant is made per job, and each job is granted read access to the
-# repository alone.
+# CI-4.2 (RTM Pipeline_04): every grant is made per job, so a compromised step's token is limited
+# to reading the repository.
 permissions: {}
 
 jobs:
@@ -70,6 +70,10 @@ jobs:
           persist-credentials: false
       - name: Every job on a pinned Blacksmith runner
         run: python3 tools/runner_labels_lint.py
+      # CI-4.3 (RTM Pipeline_04): each action pinned by its commit, each grant made per job, each
+      # checkout without the token.
+      - name: Every action pinned and every grant per job
+        run: python3 tools/workflow_pins_lint.py
       # CI-3: review.yml runs under pull_request_target with the model key;
       # this fails a change that would let it check out or run a pull
       # request's code, widen a job's token, or move a secret.
@@ -184,13 +188,11 @@ jobs:
       # upstream org.
       - name: Check out Iris-Headers beside the main repo
         shell: bash
-        env:
-          OWNER: ${{ github.repository_owner }}
         run: |
-          if git clone --depth 1 "https://github.com/$OWNER/Iris-Headers.git" ../Iris-Headers; then
-            echo "using $OWNER/Iris-Headers"
+          if git clone --depth 1 "https://github.com/${{ github.repository_owner }}/Iris-Headers.git" ../Iris-Headers; then
+            echo "using ${{ github.repository_owner }}/Iris-Headers"
           else
-            echo "no usable $OWNER/Iris-Headers" \
+            echo "no usable ${{ github.repository_owner }}/Iris-Headers" \
                  "(any clone error above is expected) - falling back to Aptix-Bio"
             rm -rf ../Iris-Headers
             git clone --depth 1 https://github.com/Aptix-Bio/Iris-Headers.git ../Iris-Headers
